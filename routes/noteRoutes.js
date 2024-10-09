@@ -221,4 +221,75 @@ router.delete('/categories/:id', async (req, res) => {
   }
 });
 
+// Get all users
+router.get('/users', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('users')
+      .select('user_id, username, email')
+      .order('username', { ascending: true });
+
+    if (error) throw error;
+
+    res.json(data);
+  } catch (error) {
+    console.error('Error fetching users:', error);
+    res.status(500).json({ error: 'An error occurred while fetching users' });
+  }
+});
+
+// Share a note with a user
+router.post('/notes/:id/share', async (req, res) => {
+  const { id } = req.params;
+  const { userId } = req.body;
+
+  try {
+    // First, check if the note exists
+    const { data: noteData, error: noteError } = await supabase
+      .from('notes')
+      .select('note_id')
+      .eq('note_id', id)
+      .single();
+
+    if (noteError) throw noteError;
+
+    if (!noteData) {
+      return res.status(404).json({ error: 'Note not found' });
+    }
+
+    // Then, check if the user exists
+    const { data: userData, error: userError } = await supabase
+      .from('users')
+      .select('user_i d')
+      .eq('user_id', userId)
+      .single();
+
+    if (userError) throw userError;
+
+    if (!userData) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // If both note and user exist, create the sharing relationship
+    const { data, error } = await supabase
+      .from('user_notes')
+      .insert({ user_id: userId, note_id: id })
+      .select()
+      .single();
+
+    if (error) {
+      // If the error is due to a unique constraint violation, it means the note is already shared
+      if (error.code === '23505') {
+        return res.status(400).json({ error: 'This note is already shared with this user' });
+      }
+      throw error;
+    }
+
+    res.status(201).json({ message: 'Note shared successfully', data });
+  } catch (error) {
+    console.error('Error sharing note:', error);
+    res.status(500).json({ error: 'An error occurred while sharing the note', details: error.message });
+  }
+});
+
 module.exports = router;
