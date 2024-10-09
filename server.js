@@ -1,12 +1,10 @@
-// backend/server.js
-
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const noteRoutes = require('./routes/noteRoutes');
-const authRoutes = require('./routes/authRoutes'); // Import authRoutes
+const userRoutes = require('./routes/userRoutes'); // Import userRoutes
 const { applyOperation } = require('./utils/ot');
 const { createClient } = require('@supabase/supabase-js');
 
@@ -37,8 +35,9 @@ if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
+// Use noteRoutes and userRoutes
 app.use('/api', noteRoutes);
-app.use('/api/auth', authRoutes); // Use authRoutes under /api/auth
+app.use('/api/users', userRoutes); // Add this line
 
 const activeNotes = {}; // { noteId: { content: '', revision: 0 } }
 
@@ -62,8 +61,8 @@ io.on('connection', (socket) => {
 
         activeNotes[noteId] = { content: data.content, revision: 0 };
       } catch (err) {
-        console.error(`Error fetching note ${noteId}:`, err);
-        socket.emit('error', 'Failed to fetch note content.');
+        console.error(`Exception fetching note ${noteId}:`, err);
+        socket.emit('error', 'An exception occurred while fetching note content.');
         return;
       }
     }
