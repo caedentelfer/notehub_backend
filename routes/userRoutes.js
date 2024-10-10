@@ -3,6 +3,7 @@ const router = express.Router();
 const { createClient } = require('@supabase/supabase-js');
 const dotenv = require('dotenv');
 const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken'); // Add this line
 
 dotenv.config();
 
@@ -60,7 +61,14 @@ router.post('/register', async (req, res) => {
 
         if (error) throw error;
 
-        res.status(201).json({ message: 'User registered successfully.', user: data });
+        // Generate JWT token
+        const token = jwt.sign(
+            { user_id: data.user_id, username: data.username, email: data.email },
+            process.env.JWT_SECRET,
+            { expiresIn: '1h' }
+        );
+
+        res.status(201).json({ message: 'User registered successfully.', token, user: { user_id: data.user_id, username: data.username, email: data.email, user_avatar: data.user_avatar } });
     } catch (error) {
         console.error('Error registering user:', error);
         res.status(500).json({ error: 'An error occurred while registering the user.', details: error.message });
@@ -101,9 +109,14 @@ router.post('/login', async (req, res) => {
             return res.status(400).json({ error: 'Invalid username or password.' });
         }
 
-        // TODO: Generate and return JWT or authentication token here
-        // For now, just return success and user data
-        res.status(200).json({ message: 'Login successful.', user: { user_id: user.user_id, username: user.username, email: user.email, user_avatar: user.user_avatar } });
+        // Generate JWT token
+        const token = jwt.sign(
+            { user_id: user.user_id, username: user.username, email: user.email },
+            process.env.JWT_SECRET,
+            { expiresIn: '1h' }
+        );
+
+        res.status(200).json({ message: 'Login successful.', token, user: { user_id: user.user_id, username: user.username, email: user.email, user_avatar: user.user_avatar } });
     } catch (error) {
         console.error('Error logging in user:', error);
         res.status(500).json({ error: 'An error occurred while logging in the user.', details: error.message });

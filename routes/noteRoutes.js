@@ -2,96 +2,153 @@ const express = require('express');
 const router = express.Router();
 const { createClient } = require('@supabase/supabase-js');
 const dotenv = require('dotenv');
+const authMiddleware = require('../middleware/auth'); // Import auth middleware
 dotenv.config();
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
-// Fetch all notes for a specific user
+// Apply auth middleware to all routes in this router
+router.use(authMiddleware);
+
+// Get all notes accessible to the user
 router.get('/notes', async (req, res) => {
-  const { user_id } = req.query;
+  const userId = req.user.user_id;
 
   try {
-    // Fetch notes where the user is linked in user_notes table
-    const { data: userNotes, error } = await supabase
+    // Join user_notes with notes to fetch notes linked to the user
+    const { data, error } = await supabase
       .from('user_notes')
-      .select('note_id, notes(*)')  // Select notes with their details
-      .eq('user_id', user_id);  // Filter by user_id
+      .select(`
+        notes (
+          note_id,
+          title,
+          content,
+          category_id,
+          tags,
+          created_on,
+          last_update
+        )
+      `)
+      .eq('user_id', userId);
 
     if (error) throw error;
 
-    // If no notes are found
-    if (!userNotes.length) {
-      return res.status(404).json({ message: 'No notes found for this user' });
-    }
+    // Extract notes from the joined data
+    const notes = data.map(userNote => userNote.notes);
 
-    // Extract notes details
-    const notes = userNotes.map(entry => entry.notes);
-
-    res.status(200).json(notes);
+    res.json(notes);
   } catch (error) {
-    console.error('Error fetching notes:', error);
+    console.error('Error fetching user notes:', error);
     res.status(500).json({ error: 'An error occurred while fetching notes' });
   }
 });
 
-// Get a single note
+// Get a single note, ensure the user has access
 router.get('/notes/:id', async (req, res) => {
+  const userId = req.user.user_id;
   const { id } = req.params;
+
   try {
-    const { data, error } = await supabase
+    // Check if user has access to the note
+    const { data: userNote, error: userNoteError } = await supabase
+      .from('user_notes')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('note_id', id)
+      .single();
+
+    if (userNoteError) {
+      if (userNoteError.code === 'PGRST116') { // Not found
+        return res.status(404).json({ error: 'Note not found or access denied' });
+      }
+      throw userNoteError;
+    }
+
+    // Fetch the note
+    const { data: noteData, error: noteError } = await supabase
       .from('notes')
       .select('*')
       .eq('note_id', id)
       .single();
 
-    if (error) throw error;
+    if (noteError) throw noteError;
 
-    if (!data) {
-      return res.status(404).json({ error: 'Note not found' });
-    }
-
-    res.json(data);
+    res.json(noteData);
   } catch (error) {
     console.error('Error fetching note:', error);
     res.status(500).json({ error: 'An error occurred while fetching the note', details: error.message });
   }
 });
 
-// Create a new note and link it to the user
+// Create a new note
 router.post('/notes', async (req, res) => {
-  const { title, content, category_id, user_id, tags } = req.body;
+  const userId = req.user.user_id;
+  const { title, content, category_id, tags } = req.body;
 
   try {
-    // Insert new note into the database
+    let categoryId = category_id;
+
+    // If category_id is a string (name of a new category), create it first
+    if (typeof category_id === 'string' && !Number.isInteger(Number(category_id))) {
+      const { data: newCategory, error: categoryError } = await supabase
+        .from('categories')
+        .insert({ name: category_id })
+        .select()
+        .single();
+
+      if (categoryError) throw categoryError;
+      categoryId = newCategory.category_id;
+    }
+
+    // Insert the new note
     const { data: newNote, error: noteError } = await supabase
       .from('notes')
-      .insert([{ title, content, category_id, tags }])
+      .insert([{ title, content, category_id: categoryId, tags, created_on: new Date().toISOString(), last_update: new Date().toISOString() }])
       .select()
       .single();
 
     if (noteError) throw noteError;
 
-    // Link the user to the newly created note in user_notes table
-    const { data: userNoteLink, error: linkError } = await supabase
+    // Insert into user_notes with is_creator = true
+    const { data: userNoteData, error: userNoteError } = await supabase
       .from('user_notes')
-      .insert([{ user_id, note_id: newNote.note_id, is_creator: true }]);
+      .insert([{ user_id: userId, note_id: newNote.note_id, is_creator: true }])
+      .select()
+      .single();
 
-    if (linkError) throw linkError;
+    if (userNoteError) throw userNoteError;
 
     res.status(201).json(newNote);
   } catch (error) {
     console.error('Error creating note:', error);
-    res.status(500).json({ error: 'An error occurred while creating the note' });
+    res.status(500).json({ error: 'An error occurred while creating the note', details: error.message });
   }
 });
 
-// Update a note
+// Update a note, ensure the user has access
 router.put('/notes/:id', async (req, res) => {
+  const userId = req.user.user_id;
   const { id } = req.params;
   const { title, content, category_id, tags } = req.body;
 
   try {
-    const { data, error } = await supabase
+    // Check if user has access to the note
+    const { data: userNote, error: userNoteError } = await supabase
+      .from('user_notes')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('note_id', id)
+      .single();
+
+    if (userNoteError) {
+      if (userNoteError.code === 'PGRST116') { // Not found
+        return res.status(404).json({ error: 'Note not found or access denied' });
+      }
+      throw userNoteError;
+    }
+
+    // Update the note
+    const { data: updatedNote, error: updateError } = await supabase
       .from('notes')
       .update({
         title,
@@ -104,56 +161,62 @@ router.put('/notes/:id', async (req, res) => {
       .select()
       .single();
 
-    if (error) throw error;
+    if (updateError) throw updateError;
 
-    if (!data) {
-      return res.status(404).json({ error: 'Note not found' });
-    }
-
-    res.json(data);
+    res.json(updatedNote);
   } catch (error) {
     console.error('Error updating note:', error);
     res.status(500).json({ error: 'An error occurred while updating the note', details: error.message });
   }
 });
 
-// Delete a note
+// Delete a note, ensure the user is the creator
 router.delete('/notes/:id', async (req, res) => {
+  const userId = req.user.user_id;
   const { id } = req.params;
 
   try {
-    const { data, error } = await supabase
+    // Check if user is the creator
+    const { data: userNote, error: userNoteError } = await supabase
+      .from('user_notes')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('note_id', id)
+      .single();
+
+    if (userNoteError) {
+      if (userNoteError.code === 'PGRST116') { // Not found
+        return res.status(404).json({ error: 'Note not found or access denied' });
+      }
+      throw userNoteError;
+    }
+
+    if (!userNote.is_creator) {
+      return res.status(403).json({ error: 'Only the creator can delete the note' });
+    }
+
+    // Delete the note
+    const { data: deletedNote, error: deleteError } = await supabase
       .from('notes')
+      .delete()
+      .eq('note_id', id)
+      .select()
+      .single();
+
+    if (deleteError) throw deleteError;
+
+    // Remove all user_notes entries for this note
+    const { error: deleteUserNotesError } = await supabase
+      .from('user_notes')
       .delete()
       .eq('note_id', id);
 
-    if (error) throw error;
+    if (deleteUserNotesError) throw deleteUserNotesError;
 
     res.json({ message: 'Note deleted successfully' });
   } catch (error) {
     console.error('Error deleting note:', error);
-    res.status(500).json({ error: 'An error occurred while deleting the note' });
-  }
-});
-
-// Share a note with another user
-router.post('/notes/:id/share', async (req, res) => {
-  const { id } = req.params;
-  const { userId } = req.body;
-
-  try {
-    // Insert the shared note into the user_notes table for the other user
-    const { data, error } = await supabase
-      .from('user_notes')
-      .insert([{ user_id: userId, note_id: id, is_creator: false }])
-      .select();
-
-    if (error) throw error;
-
-    res.status(200).json({ message: 'Note shared successfully.' });
-  } catch (error) {
-    console.error('Error sharing note:', error);
-    res.status(500).json({ error: 'An error occurred while sharing the note.' });
+    res.status(500).json({ error: 'An error occurred while deleting the note', details: error.message });
   }
 });
 
@@ -243,7 +306,7 @@ router.delete('/categories/:id', async (req, res) => {
   }
 });
 
-// Get all users
+// Get all users (for sharing)
 router.get('/users', async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -262,52 +325,66 @@ router.get('/users', async (req, res) => {
 
 // Share a note with a user
 router.post('/notes/:id/share', async (req, res) => {
-  const { id } = req.params;
-  const { userId } = req.body;
+  const userId = req.user.user_id; // the sharer
+  const { id } = req.params; // note_id
+  const { userId: targetUserId } = req.body; // the user to share with
+
+  if (userId === targetUserId) {
+    return res.status(400).json({ error: 'Cannot share note with yourself' });
+  }
 
   try {
-    // First, check if the note exists
-    const { data: noteData, error: noteError } = await supabase
-      .from('notes')
-      .select('note_id')
+    // Check if note exists and user has access
+    const { data: userNote, error: userNoteError } = await supabase
+      .from('user_notes')
+      .select('*')
+      .eq('user_id', userId)
       .eq('note_id', id)
       .single();
 
-    if (noteError) throw noteError;
-
-    if (!noteData) {
-      return res.status(404).json({ error: 'Note not found' });
+    if (userNoteError) {
+      if (userNoteError.code === 'PGRST116') { // Not found
+        return res.status(404).json({ error: 'Note not found or access denied' });
+      }
+      throw userNoteError;
     }
 
-    // Then, check if the user exists
-    const { data: userData, error: userError } = await supabase
+    // Check if target user exists
+    const { data: targetUser, error: targetUserError } = await supabase
       .from('users')
-      .select('user_i d')
-      .eq('user_id', userId)
+      .select('*')
+      .eq('user_id', targetUserId)
       .single();
 
-    if (userError) throw userError;
-
-    if (!userData) {
-      return res.status(404).json({ error: 'User not found' });
+    if (targetUserError) {
+      if (targetUserError.code === 'PGRST116') { // Not found
+        return res.status(404).json({ error: 'User to share with not found' });
+      }
+      throw targetUserError;
     }
 
-    // If both note and user exist, create the sharing relationship
-    const { data, error } = await supabase
+    // Check if the note is already shared with the target user
+    const { data: existingShare, error: existingShareError } = await supabase
       .from('user_notes')
-      .insert({ user_id: userId, note_id: id })
+      .select('*')
+      .eq('user_id', targetUserId)
+      .eq('note_id', id)
+      .single();
+
+    if (!existingShareError && existingShare) {
+      return res.status(400).json({ error: 'This note is already shared with this user' });
+    }
+
+    // Insert into user_notes
+    const { data: sharedNote, error: shareError } = await supabase
+      .from('user_notes')
+      .insert([{ user_id: targetUserId, note_id: id, is_creator: false }])
       .select()
       .single();
 
-    if (error) {
-      // If the error is due to a unique constraint violation, it means the note is already shared
-      if (error.code === '23505') {
-        return res.status(400).json({ error: 'This note is already shared with this user' });
-      }
-      throw error;
-    }
+    if (shareError) throw shareError;
 
-    res.status(201).json({ message: 'Note shared successfully', data });
+    res.status(201).json({ message: 'Note shared successfully', sharedNote });
   } catch (error) {
     console.error('Error sharing note:', error);
     res.status(500).json({ error: 'An error occurred while sharing the note', details: error.message });

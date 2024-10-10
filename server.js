@@ -28,16 +28,11 @@ app.use(cors({
 }));
 app.use(express.json());
 
-if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
-  console.error('Supabase URL or Key is missing. Please check your .env file.');
-  process.exit(1);
-}
-
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
-
 // Use noteRoutes and userRoutes
 app.use('/api', noteRoutes);
-app.use('/api/users', userRoutes); // Add this line
+app.use('/api/users', userRoutes); // Ensure userRoutes are mounted correctly
+
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
 const activeNotes = {}; // { noteId: { content: '', revision: 0 } }
 
