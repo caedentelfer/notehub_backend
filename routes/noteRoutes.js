@@ -6,13 +6,16 @@ dotenv.config();
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
-// Get all notes
+// Get notes for a specific user
 router.get('/notes', async (req, res) => {
+  const { user_id } = req.query;
+
   try {
     const { data, error } = await supabase
       .from('notes')
-      .select('*')
-      .order('created_on', { ascending: false });
+      .select('notes.*, user_notes.is_creator')
+      .eq('user_notes.user_id', user_id)
+      .innerJoin('user_notes', 'notes.note_id', 'user_notes.note_id');
 
     if (error) throw error;
 
@@ -46,41 +49,31 @@ router.get('/notes/:id', async (req, res) => {
   }
 });
 
-// Create a new note
+// Create a new note and link it to the user
 router.post('/notes', async (req, res) => {
-  const { title, content, category_id, tags } = req.body;
+  const { title, content, category_id, user_id, tags } = req.body;
 
   try {
-    let categoryId = category_id;
-
-    // If category_id is a string (name of a new category), create it first
-    if (typeof category_id === 'string' && !Number.isInteger(Number(category_id))) {
-      const { data: newCategory, error: categoryError } = await supabase
-        .from('categories')
-        .insert({ name: category_id })
-        .select()
-        .single();
-
-      if (categoryError) throw categoryError;
-      categoryId = newCategory.category_id;
-    }
-
-    const { data, error } = await supabase
+    // Insert new note into the database
+    const { data: newNote, error: noteError } = await supabase
       .from('notes')
-      .insert([{ title, content, category_id: categoryId, tags }])
+      .insert([{ title, content, category_id, tags }])
       .select()
       .single();
 
-    if (error) throw error;
+    if (noteError) throw noteError;
 
-    if (!data) {
-      throw new Error('No data returned from insert operation');
-    }
+    // Link the user to the newly created note in user_notes table
+    const { data: userNoteLink, error: linkError } = await supabase
+      .from('user_notes')
+      .insert([{ user_id, note_id: newNote.note_id, is_creator: true }]);
 
-    res.status(201).json(data);
+    if (linkError) throw linkError;
+
+    res.status(201).json(newNote);
   } catch (error) {
     console.error('Error creating note:', error);
-    res.status(500).json({ error: 'An error occurred while creating the note', details: error.message });
+    res.status(500).json({ error: 'An error occurred while creating the note' });
   }
 });
 
@@ -92,9 +85,9 @@ router.put('/notes/:id', async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('notes')
-      .update({ 
-        title, 
-        content, 
+      .update({
+        title,
+        content,
         category_id,
         tags,
         last_update: new Date().toISOString()
@@ -132,6 +125,27 @@ router.delete('/notes/:id', async (req, res) => {
   } catch (error) {
     console.error('Error deleting note:', error);
     res.status(500).json({ error: 'An error occurred while deleting the note' });
+  }
+});
+
+// Share a note with another user
+router.post('/notes/:id/share', async (req, res) => {
+  const { id } = req.params;
+  const { userId } = req.body;
+
+  try {
+    // Insert the shared note into the user_notes table for the other user
+    const { data, error } = await supabase
+      .from('user_notes')
+      .insert([{ user_id: userId, note_id: id, is_creator: false }])
+      .select();
+
+    if (error) throw error;
+
+    res.status(200).json({ message: 'Note shared successfully.' });
+  } catch (error) {
+    console.error('Error sharing note:', error);
+    res.status(500).json({ error: 'An error occurred while sharing the note.' });
   }
 });
 
