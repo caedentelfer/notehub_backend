@@ -6,20 +6,28 @@ dotenv.config();
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
-// Get notes for a specific user
+// Fetch all notes for a specific user
 router.get('/notes', async (req, res) => {
   const { user_id } = req.query;
 
   try {
-    const { data, error } = await supabase
-      .from('notes')
-      .select('notes.*, user_notes.is_creator')
-      .eq('user_notes.user_id', user_id)
-      .innerJoin('user_notes', 'notes.note_id', 'user_notes.note_id');
+    // Fetch notes where the user is linked in user_notes table
+    const { data: userNotes, error } = await supabase
+      .from('user_notes')
+      .select('note_id, notes(*)')  // Select notes with their details
+      .eq('user_id', user_id);  // Filter by user_id
 
     if (error) throw error;
 
-    res.json(data);
+    // If no notes are found
+    if (!userNotes.length) {
+      return res.status(404).json({ message: 'No notes found for this user' });
+    }
+
+    // Extract notes details
+    const notes = userNotes.map(entry => entry.notes);
+
+    res.status(200).json(notes);
   } catch (error) {
     console.error('Error fetching notes:', error);
     res.status(500).json({ error: 'An error occurred while fetching notes' });
