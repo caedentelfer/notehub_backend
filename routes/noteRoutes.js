@@ -148,17 +148,36 @@ router.delete('/notes/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
 
   try {
-    const { data, error } = await supabase
+    // Start a transaction
+    const { error: transactionError } = await supabase.rpc('begin_transaction');
+    if (transactionError) throw transactionError;
+
+    // First, delete all related entries in the user_notes table
+    const { error: userNotesDeleteError } = await supabase
+      .from('user_notes')
+      .delete()
+      .eq('note_id', id);
+
+    if (userNotesDeleteError) throw userNotesDeleteError;
+
+    // Then, delete the note itself
+    const { error: noteDeleteError } = await supabase
       .from('notes')
       .delete()
       .eq('note_id', id);
 
-    if (error) throw error;
+    if (noteDeleteError) throw noteDeleteError;
+
+    // Commit the transaction
+    const { error: commitError } = await supabase.rpc('commit_transaction');
+    if (commitError) throw commitError;
 
     res.json({ message: 'Note deleted successfully' });
   } catch (error) {
+    // Rollback the transaction in case of any error
+    await supabase.rpc('rollback_transaction');
     console.error('Error deleting note:', error);
-    res.status(500).json({ error: 'An error occurred while deleting the note' });
+    res.status(500).json({ error: 'An error occurred while deleting the note', details: error.message });
   }
 });
 
@@ -324,6 +343,68 @@ router.post('/notes/:id/share', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Error sharing note:', error);
     res.status(500).json({ error: 'An error occurred while sharing the note', details: error.message });
+  }
+});
+
+// Get users with access to a specific note
+router.get('/notes/:id/users', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const { data: users, error } = await supabase
+      .from('user_notes')
+      .select(`
+        user_id,
+        is_creator,
+        users (
+          username,
+          email
+        )
+      `)
+      .eq('note_id', id);
+
+    if (error) throw error;
+
+    res.status(200).json(users);
+  } catch (error) {
+    console.error('Error fetching users with access:', error);
+    res.status(500).json({ error: 'An error occurred while fetching users with access', details: error.message });
+  }
+});
+
+// Remove user access from a note
+router.delete('/notes/:noteId/users/:userId', authenticateToken, async (req, res) => {
+  const { noteId, userId } = req.params;
+  const { user_id: requestingUserId } = req.user;
+
+  try {
+    // Check if the requesting user is the creator of the note
+    const { data: creatorData, error: creatorError } = await supabase
+      .from('user_notes')
+      .select('is_creator')
+      .eq('note_id', noteId)
+      .eq('user_id', requestingUserId)
+      .single();
+
+    if (creatorError) throw creatorError;
+
+    if (!creatorData || !creatorData.is_creator) {
+      return res.status(403).json({ error: 'Only the creator can remove user access' });
+    }
+
+    // Remove the user's access
+    const { data, error } = await supabase
+      .from('user_notes')
+      .delete()
+      .eq('note_id', noteId)
+      .eq('user_id', userId);
+
+    if (error) throw error;
+
+    res.status(200).json({ message: 'User access removed successfully' });
+  } catch (error) {
+    console.error('Error removing user access:', error);
+    res.status(500).json({ error: 'An error occurred while removing user access', details: error.message });
   }
 });
 

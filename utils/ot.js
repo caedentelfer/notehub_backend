@@ -1,24 +1,29 @@
-// utils/ot.js
+// backend/utils/ot.js
 
 function generateOperation(oldStr, newStr) {
-    let i = 0;
     const ops = [];
+    let commonStart = 0;
+    while (commonStart < oldStr.length && commonStart < newStr.length && oldStr[commonStart] === newStr[commonStart]) {
+        commonStart++;
+    }
 
-    while (i < oldStr.length || i < newStr.length) {
-        if (oldStr[i] !== newStr[i]) {
-            let j = i;
-            while (j < newStr.length && oldStr[i] !== newStr[j]) {
-                j++;
-            }
-            if (j > i) {
-                ops.push({ insert: newStr.slice(i, j), position: i });
-                i = j;
-            } else {
-                ops.push({ delete: 1, position: i });
-            }
-        } else {
-            i++;
-        }
+    let commonEnd = 0;
+    while (
+        commonEnd < (oldStr.length - commonStart) &&
+        commonEnd < (newStr.length - commonStart) &&
+        oldStr[oldStr.length - 1 - commonEnd] === newStr[newStr.length - 1 - commonEnd]
+    ) {
+        commonEnd++;
+    }
+
+    const oldMiddle = oldStr.slice(commonStart, oldStr.length - commonEnd);
+    const newMiddle = newStr.slice(commonStart, newStr.length - commonEnd);
+
+    if (oldMiddle.length > 0) {
+        ops.push({ delete: oldMiddle.length, position: commonStart });
+    }
+    if (newMiddle.length > 0) {
+        ops.push({ insert: newMiddle, position: commonStart });
     }
 
     return ops;
@@ -26,6 +31,8 @@ function generateOperation(oldStr, newStr) {
 
 function applyOperation(str, ops) {
     let result = str;
+    // Sort operations in reverse order to prevent position shifting
+    ops.sort((a, b) => b.position - a.position);
     for (const op of ops) {
         if (op.insert) {
             result = result.slice(0, op.position) + op.insert + result.slice(op.position);
