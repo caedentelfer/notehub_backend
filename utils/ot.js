@@ -1,31 +1,21 @@
+// backend/utils/ot.js
+
 function generateOperation(oldStr, newStr) {
     const ops = [];
-    let commonStart = 0;
-    while (
-        commonStart < oldStr.length &&
-        commonStart < newStr.length &&
-        oldStr[commonStart] === newStr[commonStart]
-    ) {
-        commonStart++;
+    let index = 0;
+
+    while (index < oldStr.length || index < newStr.length) {
+        if (oldStr[index] !== newStr[index]) {
+            break;
+        }
+        index++;
     }
 
-    let commonEnd = 0;
-    while (
-        commonEnd < (oldStr.length - commonStart) &&
-        commonEnd < (newStr.length - commonStart) &&
-        oldStr[oldStr.length - 1 - commonEnd] === newStr[newStr.length - 1 - commonEnd]
-    ) {
-        commonEnd++;
+    if (index < oldStr.length) {
+        ops.push({ type: 'delete', position: index, count: oldStr.length - index });
     }
-
-    const oldMiddle = oldStr.slice(commonStart, oldStr.length - commonEnd);
-    const newMiddle = newStr.slice(commonStart, newStr.length - commonEnd);
-
-    if (oldMiddle.length > 0) {
-        ops.push({ delete: oldMiddle.length, position: commonStart });
-    }
-    if (newMiddle.length > 0) {
-        ops.push({ insert: newMiddle, position: commonStart });
+    if (index < newStr.length) {
+        ops.push({ type: 'insert', position: index, text: newStr.slice(index) });
     }
 
     return ops;
@@ -33,21 +23,56 @@ function generateOperation(oldStr, newStr) {
 
 function applyOperation(str, ops) {
     let result = str;
-    // Sort operations in reverse order to prevent position shifting
-    ops.sort((a, b) => b.position - a.position);
     for (const op of ops) {
-        if (op.insert) {
+        if (op.type === 'insert') {
             result =
                 result.slice(0, op.position) +
-                op.insert +
+                op.text +
                 result.slice(op.position);
-        } else if (op.delete) {
+        } else if (op.type === 'delete') {
             result =
                 result.slice(0, op.position) +
-                result.slice(op.position + op.delete);
+                result.slice(op.position + op.count);
         }
     }
     return result;
 }
 
-module.exports = { generateOperation, applyOperation };
+function transformOperation(opA, opB) {
+    const transformedOps = [];
+    for (const a of opA) {
+        let transformedOp = { ...a };
+        for (const b of opB) {
+            if (a.type === 'insert' && b.type === 'insert') {
+                if (a.position >= b.position) {
+                    transformedOp.position += b.text.length;
+                }
+            } else if (a.type === 'insert' && b.type === 'delete') {
+                if (a.position >= b.position) {
+                    transformedOp.position -= b.count;
+                }
+            } else if (a.type === 'delete' && b.type === 'insert') {
+                if (a.position >= b.position) {
+                    transformedOp.position += b.text.length;
+                }
+            } else if (a.type === 'delete' && b.type === 'delete') {
+                if (a.position >= b.position && a.position < b.position + b.count) {
+                    // Overlapping deletes; adjust accordingly
+                    const overlap = (b.position + b.count) - a.position;
+                    transformedOp.count -= overlap;
+                    transformedOp.position = b.position;
+                } else if (a.position >= b.position + b.count) {
+                    transformedOp.position -= b.count;
+                }
+            }
+        }
+        transformedOps.push(transformedOp);
+    }
+    return transformedOps;
+}
+
+module.exports = {
+    generateOperation,
+    applyOperation,
+    transformOperation,
+};

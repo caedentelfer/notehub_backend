@@ -1,3 +1,5 @@
+// backend/server.js
+
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -5,7 +7,7 @@ const cors = require('cors');
 const dotenv = require('dotenv');
 const noteRoutes = require('./routes/noteRoutes');
 const userRoutes = require('./routes/userRoutes');
-const { applyOperation } = require('./utils/ot');
+const { applyOperation, transformOperation } = require('./utils/ot');
 const { createClient } = require('@supabase/supabase-js');
 
 dotenv.config();
@@ -46,7 +48,7 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY
 app.use('/api', noteRoutes);
 app.use('/api/users', userRoutes);
 
-const activeNotes = {}; // { noteId: { content: '', revision: 0 } }
+const activeNotes = {}; // { noteId: { content: '', revision: 0, history: [] } }
 
 io.on('connection', (socket) => {
   console.log('A user connected:', socket.id);
@@ -65,7 +67,7 @@ io.on('connection', (socket) => {
 
         if (error) throw error;
 
-        activeNotes[noteId] = { content: data.content, revision: 0 };
+        activeNotes[noteId] = { content: data.content, revision: 0, history: [] };
       } catch (err) {
         console.error(`Exception fetching note ${noteId}:`, err);
         socket.emit('error', 'An exception occurred while fetching note content.');
@@ -91,15 +93,12 @@ io.on('connection', (socket) => {
 
     const note = activeNotes[noteId];
 
-    // Remove strict revision check
     if (revision < note.revision) {
-      console.warn(`Client revision (${revision}) is behind server revision (${note.revision}) for note ${noteId}.`);
-      // Optionally, you can send the client the latest content
-      socket.emit('init', {
-        content: note.content,
-        revision: note.revision
-      });
-      return;
+      // Transform incoming operations
+      const opsSinceRevision = note.history.slice(revision);
+      for (const pastOp of opsSinceRevision) {
+        operations = transformOperation(operations, pastOp.operations);
+      }
     }
 
     try {
@@ -108,8 +107,14 @@ io.on('connection', (socket) => {
       note.content = newContent;
       note.revision += 1;
 
-      // Broadcast the operations to all clients, including the sender
-      io.to(noteId).emit('update', { operations, revision: note.revision });
+      // Save operation history
+      note.history.push({ operations, revision: note.revision });
+
+      // Acknowledge the client
+      socket.emit('ack', note.revision);
+
+      // Broadcast the operations to other clients
+      socket.to(noteId).emit('update', { operations, revision: note.revision });
 
       // Persist the changes to Supabase
       const { data, error } = await supabase
@@ -136,3 +141,5 @@ io.on('connection', (socket) => {
 server.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });
+
+
