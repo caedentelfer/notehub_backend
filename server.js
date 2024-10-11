@@ -23,16 +23,31 @@ const io = new Server(server, {
 const port = process.env.PORT || 3001;
 
 app.use(cors({
-  origin: process.env.FRONTEND_URL || "http://localhost:3000",
+  origin: new URL(process.env.FRONTEND_URL || "http://localhost:3000").origin, // Normalize URL to avoid trailing slashes
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   credentials: true
 }));
+
+// Handle preflight requests (OPTIONS)
+app.options('*', cors({
+  origin: new URL(process.env.FRONTEND_URL || "http://localhost:3000").origin, // Normalize URL to avoid trailing slashes
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  credentials: true
+}));
+
+
 app.use(express.json());
+
+if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
+  console.error('Supabase URL or Key is missing. Please check your .env file.');
+  process.exit(1);
+}
+
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
 // Use noteRoutes and userRoutes
 app.use('/api', noteRoutes);
-app.use('/api/users', userRoutes); // Ensure userRoutes are mounted correctly
-
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+app.use('/api/users', userRoutes);
 
 const activeNotes = {}; // { noteId: { content: '', revision: 0 } }
 
