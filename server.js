@@ -4,7 +4,7 @@ const { Server } = require('socket.io');
 const cors = require('cors');
 const dotenv = require('dotenv');
 const noteRoutes = require('./routes/noteRoutes');
-const userRoutes = require('./routes/userRoutes'); // Import userRoutes
+const userRoutes = require('./routes/userRoutes');
 const { applyOperation } = require('./utils/ot');
 const { createClient } = require('@supabase/supabase-js');
 
@@ -23,18 +23,16 @@ const io = new Server(server, {
 const port = process.env.PORT || 3001;
 
 app.use(cors({
-  origin: new URL(process.env.FRONTEND_URL || "http://localhost:3000").origin, // Normalize URL to avoid trailing slashes
+  origin: new URL(process.env.FRONTEND_URL || "http://localhost:3000").origin,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   credentials: true
 }));
 
-// Handle preflight requests (OPTIONS)
 app.options('*', cors({
-  origin: new URL(process.env.FRONTEND_URL || "http://localhost:3000").origin, // Normalize URL to avoid trailing slashes
+  origin: new URL(process.env.FRONTEND_URL || "http://localhost:3000").origin,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   credentials: true
 }));
-
 
 app.use(express.json());
 
@@ -45,7 +43,6 @@ if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
-// Use noteRoutes and userRoutes
 app.use('/api', noteRoutes);
 app.use('/api/users', userRoutes);
 
@@ -58,7 +55,6 @@ io.on('connection', (socket) => {
     console.log(`User ${socket.id} joined note: ${noteId}`);
     socket.join(noteId);
 
-    // Initialize activeNotes if not present
     if (!activeNotes[noteId]) {
       try {
         const { data, error } = await supabase
@@ -95,20 +91,25 @@ io.on('connection', (socket) => {
 
     const note = activeNotes[noteId];
 
-    if (revision !== note.revision) {
-      console.warn(`Revision mismatch for note ${noteId}. Client: ${revision}, Server: ${note.revision}`);
-      socket.emit('error', 'Revision mismatch. Please refresh the content.');
+    // Remove strict revision check
+    if (revision < note.revision) {
+      console.warn(`Client revision (${revision}) is behind server revision (${note.revision}) for note ${noteId}.`);
+      // Optionally, you can send the client the latest content
+      socket.emit('init', {
+        content: note.content,
+        revision: note.revision
+      });
       return;
     }
 
-    // Apply operations
     try {
+      // Apply operations to server content
       const newContent = applyOperation(note.content, operations);
       note.content = newContent;
       note.revision += 1;
 
-      // Broadcast the operations to other clients in the room
-      socket.to(noteId).emit('update', { operations, revision: note.revision });
+      // Broadcast the operations to all clients, including the sender
+      io.to(noteId).emit('update', { operations, revision: note.revision });
 
       // Persist the changes to Supabase
       const { data, error } = await supabase
