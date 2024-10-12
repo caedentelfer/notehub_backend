@@ -1,4 +1,4 @@
-// backend/server.js
+// server.js
 
 const express = require('express');
 const http = require('http');
@@ -7,7 +7,7 @@ const cors = require('cors');
 const dotenv = require('dotenv');
 const noteRoutes = require('./routes/noteRoutes');
 const userRoutes = require('./routes/userRoutes');
-const { applyOperation, transformOperation } = require('./utils/ot');
+const { transformOperations, applyOperations } = require('./utils/ot');
 const { createClient } = require('@supabase/supabase-js');
 
 dotenv.config();
@@ -45,10 +45,11 @@ if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
+// Use noteRoutes and userRoutes
 app.use('/api', noteRoutes);
 app.use('/api/users', userRoutes);
 
-const activeNotes = {}; // { noteId: { content: '', revision: 0, history: [] } }
+const activeNotes = {}; // { noteId: { content: '', revision: 0, history: [Operation], cursors: { socketId: position } } }
 
 io.on('connection', (socket) => {
   console.log('A user connected:', socket.id);
@@ -57,7 +58,9 @@ io.on('connection', (socket) => {
     console.log(`User ${socket.id} joined note: ${noteId}`);
     socket.join(noteId);
 
+    // Initialize activeNotes if not present
     if (!activeNotes[noteId]) {
+      activeNotes[noteId] = { content: '', revision: 0, history: [], cursors: {} };
       try {
         const { data, error } = await supabase
           .from('notes')
@@ -67,7 +70,7 @@ io.on('connection', (socket) => {
 
         if (error) throw error;
 
-        activeNotes[noteId] = { content: data.content, revision: 0, history: [] };
+        activeNotes[noteId].content = data.content;
       } catch (err) {
         console.error(`Exception fetching note ${noteId}:`, err);
         socket.emit('error', 'An exception occurred while fetching note content.');
@@ -75,15 +78,16 @@ io.on('connection', (socket) => {
       }
     }
 
-    // Send current content and revision to the newly joined client
+    // Send current content, revision, and existing cursor positions to the newly joined client
     socket.emit('init', {
       content: activeNotes[noteId].content,
-      revision: activeNotes[noteId].revision
+      revision: activeNotes[noteId].revision,
+      cursors: activeNotes[noteId].cursors
     });
   });
 
-  socket.on('update', async ({ noteId, operations, revision }) => {
-    console.log(`Received update for note ${noteId} from ${socket.id}:`, { operations, revision });
+  socket.on('update', ({ noteId, operations, revision, cursorPosition }) => {
+    console.log(`Received update for note ${noteId} from ${socket.id}:`, { operations, revision, cursorPosition });
 
     if (!activeNotes[noteId]) {
       console.error(`Note ${noteId} not found in activeNotes.`);
@@ -93,53 +97,80 @@ io.on('connection', (socket) => {
 
     const note = activeNotes[noteId];
 
-    if (revision < note.revision) {
-      // Transform incoming operations
-      const opsSinceRevision = note.history.slice(revision);
-      for (const pastOp of opsSinceRevision) {
-        operations = transformOperation(operations, pastOp.operations);
-      }
+    if (revision > note.revision) {
+      console.warn(`Client revision (${revision}) is ahead of server revision (${note.revision}).`);
+      socket.emit('error', 'Invalid revision number.');
+      return;
     }
 
+    // Get all operations that have been applied since the client's revision
+    const concurrentOps = note.history.slice(revision);
+    console.log(`Concurrent operations to transform against:`, concurrentOps);
+
+    // Transform the incoming operations against concurrent operations
+    const transformedOps = transformOperations(operations, concurrentOps);
+    console.log(`Transformed operations:`, transformedOps);
+
+    // Apply the transformed operations to the server's content
     try {
-      // Apply operations to server content
-      const newContent = applyOperation(note.content, operations);
+      const newContent = applyOperations(note.content, transformedOps);
+      console.log(`New content after applying operations:`, newContent);
       note.content = newContent;
-      note.revision += 1;
+      note.revision += transformedOps.length; // Increment revision by number of operations
 
-      // Save operation history
-      note.history.push({ operations, revision: note.revision });
+      // Add the transformed operations to the history
+      note.history.push(...transformedOps);
+      console.log(`Updated operation history:`, note.history);
 
-      // Acknowledge the client
-      socket.emit('ack', note.revision);
+      // Update cursor position for the sender
+      note.cursors[socket.id] = cursorPosition;
 
-      // Broadcast the operations to other clients
-      socket.to(noteId).emit('update', { operations, revision: note.revision });
+      // Broadcast the transformed operations and updated revision to other clients
+      socket.to(noteId).emit('update', { operations: transformedOps, revision: note.revision });
+      socket.to(noteId).emit('cursor-update', { socketId: socket.id, cursorPosition });
 
       // Persist the changes to Supabase
-      const { data, error } = await supabase
+      supabase
         .from('notes')
         .update({ content: note.content, last_update: new Date().toISOString() })
-        .eq('note_id', noteId);
-
-      if (error) {
-        console.error(`Error updating note ${noteId} in Supabase:`, error);
-        socket.emit('error', 'Failed to persist changes.');
-      }
+        .eq('note_id', noteId)
+        .then(({ data, error }) => {
+          if (error) {
+            console.error(`Error updating note ${noteId} in Supabase:`, error);
+            socket.emit('error', 'Failed to persist changes.');
+          } else {
+            console.log(`Successfully updated note ${noteId} in Supabase.`);
+          }
+        });
     } catch (err) {
       console.error(`Error applying operations for note ${noteId}:`, err);
       socket.emit('error', 'Failed to apply operations.');
     }
   });
 
+  socket.on('cursor-update', ({ noteId, cursorPosition }) => {
+    if (!activeNotes[noteId]) return;
+
+    // Update the cursor position for this socket
+    activeNotes[noteId].cursors[socket.id] = cursorPosition;
+
+    // Broadcast the cursor position to other clients in the room
+    socket.to(noteId).emit('cursor-update', { socketId: socket.id, cursorPosition });
+  });
+
   socket.on('disconnect', () => {
     console.log('User disconnected:', socket.id);
-    // Optional: Handle cleanup if necessary
+    // Remove the user's cursor positions from all notes
+    for (const noteId in activeNotes) {
+      if (activeNotes[noteId].cursors[socket.id]) {
+        delete activeNotes[noteId].cursors[socket.id];
+        // Broadcast the cursor removal
+        socket.to(noteId).emit('cursor-remove', { socketId: socket.id });
+      }
+    }
   });
 });
 
 server.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });
-
-
