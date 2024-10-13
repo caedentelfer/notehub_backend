@@ -4,6 +4,8 @@ const { createClient } = require("@supabase/supabase-js");
 const dotenv = require("dotenv");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
+const validator = require("validator");
+const authenticateToken = require('../middleware/authMiddleware');
 
 dotenv.config();
 
@@ -13,22 +15,31 @@ const supabase = createClient(
 );
 
 /**
- * @route   POST /api/users/register
- * @desc    Register a new user
- * @access  Public
+ * Register a new user
+ * @route POST /api/users/register
+ * @access Public
  */
 router.post("/register", async (req, res) => {
-  const { username, email, password, user_avatar } = req.body;
-
-  // Basic validation
-  if (!username || !email || !password) {
-    return res
-      .status(400)
-      .json({ error: "Username, email, and password are required." });
-  }
-
   try {
-    // Check if username or email already exists
+    let { username, email, password, user_avatar } = req.body;
+
+    username = typeof username === 'string' ? validator.trim(username) : '';
+    email = typeof email === 'string' ? validator.normalizeEmail(email) : '';
+    password = typeof password === 'string' ? validator.trim(password) : '';
+    user_avatar = typeof user_avatar === 'string' ? validator.trim(user_avatar) : null;
+
+    if (!username || !email || !password) {
+      return res.status(400).json({ error: "Username, email, and password are required." });
+    }
+
+    if (!validator.isAlphanumeric(username)) {
+      return res.status(400).json({ error: "Username must be alphanumeric." });
+    }
+
+    if (!validator.isEmail(email)) {
+      return res.status(400).json({ error: "Invalid email format." });
+    }
+
     const { data: existingUsers, error: fetchError } = await supabase
       .from("users")
       .select("*")
@@ -46,11 +57,9 @@ router.post("/register", async (req, res) => {
       }
     }
 
-    // Hash the password
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(password, saltRounds);
 
-    // Insert new user into the database
     const { data, error } = await supabase
       .from("users")
       .insert([
@@ -66,9 +75,7 @@ router.post("/register", async (req, res) => {
 
     if (error) throw error;
 
-    res
-      .status(201)
-      .json({ message: "User registered successfully.", user: data });
+    res.status(201).json({ message: "User registered successfully.", user: data });
   } catch (error) {
     console.error("Error registering user:", error);
     res.status(500).json({
@@ -79,22 +86,21 @@ router.post("/register", async (req, res) => {
 });
 
 /**
- * @route   POST /api/users/login
- * @desc    Authenticate user and log them in
- * @access  Public
+ * Authenticate user and log them in
+ * @route POST /api/users/login
+ * @access Public
  */
 router.post("/login", async (req, res) => {
-  const { username, password } = req.body; // Assuming login via username
-
-  // Basic validation
-  if (!username || !password) {
-    return res
-      .status(400)
-      .json({ error: "Username and password are required." });
-  }
-
   try {
-    // Fetch user by username
+    let { username, password } = req.body;
+
+    username = typeof username === 'string' ? validator.trim(username) : '';
+    password = typeof password === 'string' ? validator.trim(password) : '';
+
+    if (!username || !password) {
+      return res.status(400).json({ error: "Username and password are required." });
+    }
+
     const { data: user, error: fetchError } = await supabase
       .from("users")
       .select("*")
@@ -103,19 +109,16 @@ router.post("/login", async (req, res) => {
 
     if (fetchError) {
       if (fetchError.code === "PGRST116") {
-        // Not found
         return res.status(400).json({ error: "Invalid username or password." });
       }
       throw fetchError;
     }
 
-    // Compare password
     const passwordMatch = await bcrypt.compare(password, user.password);
     if (!passwordMatch) {
       return res.status(400).json({ error: "Invalid username or password." });
     }
 
-    // Generate JWT Token
     const payload = {
       user_id: user.user_id,
       username: user.username,
@@ -126,10 +129,6 @@ router.post("/login", async (req, res) => {
       expiresIn: "1h",
     });
 
-    // Optionally, set the token as an HTTP-only cookie
-    // res.cookie('token', token, { httpOnly: true, secure: process.env.NODE_ENV === 'production' });
-
-    // Send the token in the response
     res.status(200).json({
       message: "Login successful.",
       token,
@@ -150,9 +149,8 @@ router.post("/login", async (req, res) => {
 });
 
 const nodemailer = require("nodemailer");
-/*SMTP transporter*/
 const transporter = nodemailer.createTransport({
-  service: "gmail" /*our notehub email service provider*/,
+  service: "gmail",
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS,
@@ -160,40 +158,39 @@ const transporter = nodemailer.createTransport({
 });
 
 /**
- * @route   POST /api/users/reset-password
- * @desc    Send password reset email
- * @access  Public
+ * Send password reset email
+ * @route POST /api/users/reset-password
+ * @access Public
  */
 router.post("/reset-password", async (req, res) => {
-  const { email } = req.body;
-
-  if (!email) {
-    return res.status(400).json({ error: "Email is required." });
-  }
-
   try {
-    /*ensure the user exists in the db*/
+    let { email } = req.body;
+    email = typeof email === 'string' ? validator.normalizeEmail(email) : '';
+
+    if (!email) {
+      return res.status(400).json({ error: "Email is required." });
+    }
+
+    if (!validator.isEmail(email)) {
+      return res.status(400).json({ error: "Invalid email format." });
+    }
+
     const { data: user, error } = await supabase
       .from("users")
       .select("*")
       .eq("email", email)
-      .single(); /*ensure only one user is returned (unique email)*/
+      .single();
 
     if (error || !user) {
       return res.status(404).json({ error: "User not found." });
     }
 
-    // Generate a JWT token with the email
     const token = jwt.sign({ email: user.email }, process.env.JWT_SECRET, {
-      expiresIn: "1h", // Token expires in 1 hour
+      expiresIn: "1h",
     });
 
-    console.log("Generated Token:", token); // Log the token
-
-    /*link attached in email to reset password*/ //TODO might need to change LINK
     const resetLink = `http://localhost:3000/pages/update-password?token=${token}`;
 
-    /*use nodemailer to send the email*/
     await transporter.sendMail({
       from: process.env.EMAIL_USER,
       to: email,
@@ -213,26 +210,31 @@ router.post("/reset-password", async (req, res) => {
   }
 });
 
+router.use(authenticateToken);
+
 /**
- * @route   POST /api/users/update-password
- * @desc    Update the user password in the database
- * @access  Public
+ * Update the user password in the database
+ * @route POST /api/users/update-password
+ * @access Private
  */
 router.post("/update-password", async (req, res) => {
-  const { email, newPassword } = req.body;
-
-  if (!email || !newPassword) {
-    return res
-      .status(400)
-      .json({ error: "Email and new password are required." });
-  }
-
   try {
-    /*Hash new password*/
+    let { email, newPassword } = req.body;
+
+    email = typeof email === 'string' ? validator.normalizeEmail(email) : '';
+    newPassword = typeof newPassword === 'string' ? validator.trim(newPassword) : '';
+
+    if (!email || !newPassword) {
+      return res.status(400).json({ error: "Email and new password are required." });
+    }
+
+    if (!validator.isEmail(email)) {
+      return res.status(400).json({ error: "Invalid email format." });
+    }
+
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
 
-    /*update the users password with the signed in email address */
     const { data, error } = await supabase
       .from("users")
       .update({ password: hashedPassword })
@@ -253,21 +255,21 @@ router.post("/update-password", async (req, res) => {
 });
 
 /**
- * @route   POST /api/users/verify-password
- * @desc    Verify user password
- * @access  Public
+ * Verify user password
+ * @route POST /api/users/verify-password
+ * @access Private
  */
 router.post("/verify-password", async (req, res) => {
-  const { userId, password } = req.body;
-
-  if (!userId || !password) {
-    return res
-      .status(400)
-      .json({ error: "User ID and password are required." });
-  }
-
   try {
-    /*Retrieve the user from the database using the userId (currently signed in user)*/
+    let { userId, password } = req.body;
+
+    userId = typeof userId === 'string' ? validator.trim(userId) : userId;
+    password = typeof password === 'string' ? validator.trim(password) : password;
+
+    if (!userId || !password) {
+      return res.status(400).json({ error: "User ID and password are required." });
+    }
+
     const { data: user, error } = await supabase
       .from("users")
       .select("*")
@@ -278,13 +280,11 @@ router.post("/verify-password", async (req, res) => {
       return res.status(404).json({ error: "User not found." });
     }
 
-    // Compare the provided password with the hashed password stored in the database
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       return res.status(401).json({ error: "Incorrect password." });
     }
 
-    // If the password is valid, respond with success
     res.status(200).json({ isValid: true });
   } catch (error) {
     console.error("Error verifying password:", error);
@@ -296,21 +296,21 @@ router.post("/verify-password", async (req, res) => {
 });
 
 /**
- * @route   POST /api/users/change-email
- * @desc    Change user email in the database
- * @access  Public
+ * Change user email in the database
+ * @route POST /api/users/change-email
+ * @access Private
  */
 router.post("/change-email", async (req, res) => {
-  const { userId, newEmail } = req.body;
-
-  if (!userId || !newEmail) {
-    return res
-      .status(400)
-      .json({ error: "User ID, and new email address are required" });
-  }
-
   try {
-    /*get user details from the db*/
+    let { userId, newEmail } = req.body;
+
+    userId = typeof userId === 'string' ? validator.trim(userId) : userId;
+    newEmail = typeof newEmail === 'string' ? validator.normalizeEmail(newEmail) : '';
+
+    if (!userId || !newEmail) {
+      return res.status(400).json({ error: "User ID and new email address are required" });
+    }
+
     const { data: user, error: userError } = await supabase
       .from("users")
       .select("*")
@@ -321,7 +321,6 @@ router.post("/change-email", async (req, res) => {
       return res.status(404).json({ error: "User not found." });
     }
 
-    /*update user email*/
     const { error: updateError } = await supabase
       .from("users")
       .update({ email: newEmail })
@@ -342,21 +341,21 @@ router.post("/change-email", async (req, res) => {
 });
 
 /**
- * @route   POST /api/users/change-username
- * @desc    Change user username in the database
- * @access  Public
+ * Change user username in the database
+ * @route POST /api/users/change-username
+ * @access Private
  */
 router.post("/change-username", async (req, res) => {
-  const { userId, newUsername } = req.body;
-
-  if (!userId || !newUsername) {
-    return res
-      .status(400)
-      .json({ error: "User ID and new username are required." });
-  }
-
   try {
-    /* Get user details from the database */
+    let { userId, newUsername } = req.body;
+
+    userId = typeof userId === 'string' ? validator.trim(userId) : userId;
+    newUsername = typeof newUsername === 'string' ? validator.trim(newUsername) : '';
+
+    if (!userId || !newUsername) {
+      return res.status(400).json({ error: "User ID and new username are required." });
+    }
+
     const { data: user, error: userError } = await supabase
       .from("users")
       .select("*")
@@ -367,10 +366,9 @@ router.post("/change-username", async (req, res) => {
       return res.status(404).json({ error: "User not found." });
     }
 
-    /* Update user username */
     const { error: updateError } = await supabase
       .from("users")
-      .update({ username: newUsername }) // Update the username field
+      .update({ username: newUsername })
       .eq("user_id", userId);
 
     if (updateError) {
@@ -388,21 +386,21 @@ router.post("/change-username", async (req, res) => {
 });
 
 /**
- * @route   POST /api/users/change-image
- * @desc    Change user profile image URL in the database
- * @access  Public
+ * Change user profile image URL in the database
+ * @route POST /api/users/change-image
+ * @access Private
  */
 router.post("/change-image", async (req, res) => {
-  const { userId, newProfileImageUrl } = req.body;
-
-  if (!userId || !newProfileImageUrl) {
-    return res
-      .status(400)
-      .json({ error: "User ID and new profile image URL are required." });
-  }
-
   try {
-    /* Get user details from the database */
+    let { userId, newProfileImageUrl } = req.body;
+
+    userId = typeof userId === 'string' ? validator.trim(userId) : userId;
+    newProfileImageUrl = typeof newProfileImageUrl === 'string' ? validator.trim(newProfileImageUrl) : '';
+
+    if (!userId || !newProfileImageUrl) {
+      return res.status(400).json({ error: "User ID and new profile image URL are required." });
+    }
+
     const { data: user, error: userError } = await supabase
       .from("users")
       .select("*")
@@ -413,10 +411,9 @@ router.post("/change-image", async (req, res) => {
       return res.status(404).json({ error: "User not found." });
     }
 
-    /* Update user profile image URL */
     const { error: updateError } = await supabase
       .from("users")
-      .update({ user_avatar: newProfileImageUrl }) // Update the profile image URL field
+      .update({ user_avatar: newProfileImageUrl })
       .eq("user_id", userId);
 
     if (updateError) {

@@ -2,17 +2,21 @@ const express = require('express');
 const router = express.Router();
 const { createClient } = require('@supabase/supabase-js');
 const dotenv = require('dotenv');
+const validator = require('validator');
 const authenticateToken = require('../middleware/authMiddleware');
 
 dotenv.config();
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
+/**
+ * Get all notes for the authenticated user.
+ * @route GET /notes
+ * @access Private
+ */
 router.get('/notes', authenticateToken, async (req, res) => {
   try {
     const { user_id } = req.user;
-
-    // Step 1: Fetch note_ids from user_notes
     const { data: userNotes, error: userNotesError } = await supabase
       .from('user_notes')
       .select('note_id')
@@ -23,10 +27,9 @@ router.get('/notes', authenticateToken, async (req, res) => {
     const noteIds = userNotes.map(un => un.note_id);
 
     if (noteIds.length === 0) {
-      return res.json([]); // No notes for the user
+      return res.json([]);
     }
 
-    // Step 2: Fetch notes with the retrieved note_ids
     const { data: notes, error: notesError } = await supabase
       .from('notes')
       .select('*')
@@ -42,10 +45,15 @@ router.get('/notes', authenticateToken, async (req, res) => {
   }
 });
 
-
-// Get a single note
+/**
+ * Get a specific note by ID.
+ * @route GET /notes/:id
+ * @access Private
+ */
 router.get('/notes/:id', authenticateToken, async (req, res) => {
-  const { id } = req.params;
+  let { id } = req.params;
+  id = validator.trim(id);
+
   try {
     const { data, error } = await supabase
       .from('notes')
@@ -66,15 +74,22 @@ router.get('/notes/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// Create a new note
+/**
+ * Create a new note.
+ * @route POST /notes
+ * @access Private
+ */
 router.post('/notes', authenticateToken, async (req, res) => {
-  const { title, content, category_id, tags } = req.body;
+  let { title, content, category_id, tags } = req.body;
   const { user_id } = req.user;
+
+  title = validator.trim(title);
+  content = validator.trim(content);
+  category_id = typeof category_id === 'string' ? validator.trim(category_id) : category_id;
 
   try {
     let categoryId = category_id;
 
-    // If category_id is a string (name of a new category), create it first
     if (typeof category_id === 'string' && !Number.isInteger(Number(category_id))) {
       const { data: newCategory, error: categoryError } = await supabase
         .from('categories')
@@ -86,7 +101,6 @@ router.post('/notes', authenticateToken, async (req, res) => {
       categoryId = newCategory.category_id;
     }
 
-    // Insert the new note
     const { data: newNote, error: noteError } = await supabase
       .from('notes')
       .insert([{ title, content, category_id: categoryId, tags }])
@@ -95,7 +109,6 @@ router.post('/notes', authenticateToken, async (req, res) => {
 
     if (noteError) throw noteError;
 
-    // Insert the user_note entry with is_creator set to true
     const { data: userNote, error: userNoteError } = await supabase
       .from('user_notes')
       .insert([{ note_id: newNote.note_id, user_id, is_creator: true }])
@@ -111,10 +124,19 @@ router.post('/notes', authenticateToken, async (req, res) => {
   }
 });
 
-// Update a note
+/**
+ * Update a note by ID.
+ * @route PUT /notes/:id
+ * @access Private
+ */
 router.put('/notes/:id', authenticateToken, async (req, res) => {
-  const { id } = req.params;
-  const { title, content, category_id, tags } = req.body;
+  let { id } = req.params;
+  let { title, content, category_id, tags } = req.body;
+
+  id = validator.trim(id);
+  title = validator.trim(title);
+  content = validator.trim(content);
+  category_id = typeof category_id === 'string' ? validator.trim(category_id) : category_id;
 
   try {
     const { data, error } = await supabase
@@ -143,16 +165,16 @@ router.put('/notes/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// Delete a note
+/**
+ * Delete a note by ID.
+ * @route DELETE /notes/:id
+ * @access Private
+ */
 router.delete('/notes/:id', authenticateToken, async (req, res) => {
-  const { id } = req.params;
+  let { id } = req.params;
+  id = validator.trim(id);
 
   try {
-    // Start a transaction
-    const { error: transactionError } = await supabase.rpc('begin_transaction');
-    if (transactionError) throw transactionError;
-
-    // First, delete all related entries in the user_notes table
     const { error: userNotesDeleteError } = await supabase
       .from('user_notes')
       .delete()
@@ -160,7 +182,13 @@ router.delete('/notes/:id', authenticateToken, async (req, res) => {
 
     if (userNotesDeleteError) throw userNotesDeleteError;
 
-    // Then, delete the note itself
+    const { error: noteSharingDeleteError } = await supabase
+      .from('note_sharing')
+      .delete()
+      .eq('note_id', id);
+
+    if (noteSharingDeleteError) throw noteSharingDeleteError;
+
     const { error: noteDeleteError } = await supabase
       .from('notes')
       .delete()
@@ -168,20 +196,18 @@ router.delete('/notes/:id', authenticateToken, async (req, res) => {
 
     if (noteDeleteError) throw noteDeleteError;
 
-    // Commit the transaction
-    const { error: commitError } = await supabase.rpc('commit_transaction');
-    if (commitError) throw commitError;
-
     res.json({ message: 'Note deleted successfully' });
   } catch (error) {
-    // Rollback the transaction in case of any error
-    await supabase.rpc('rollback_transaction');
     console.error('Error deleting note:', error);
     res.status(500).json({ error: 'An error occurred while deleting the note', details: error.message });
   }
 });
 
-// Get all categories
+/**
+ * Get all categories.
+ * @route GET /categories
+ * @access Private
+ */
 router.get('/categories', authenticateToken, async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -198,9 +224,14 @@ router.get('/categories', authenticateToken, async (req, res) => {
   }
 });
 
-// Create a new category
+/**
+ * Create a new category.
+ * @route POST /categories
+ * @access Private
+ */
 router.post('/categories', authenticateToken, async (req, res) => {
-  const { name } = req.body;
+  let { name } = req.body;
+  name = validator.trim(name);
 
   try {
     const { data, error } = await supabase
@@ -222,10 +253,17 @@ router.post('/categories', authenticateToken, async (req, res) => {
   }
 });
 
-// Update a category
+/**
+ * Update a category by ID.
+ * @route PUT /categories/:id
+ * @access Private
+ */
 router.put('/categories/:id', authenticateToken, async (req, res) => {
-  const { id } = req.params;
-  const { name } = req.body;
+  let { id } = req.params;
+  let { name } = req.body;
+
+  id = validator.trim(id);
+  name = validator.trim(name);
 
   try {
     const { data, error } = await supabase
@@ -248,9 +286,14 @@ router.put('/categories/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// Delete a category
+/**
+ * Delete a category by ID.
+ * @route DELETE /categories/:id
+ * @access Private
+ */
 router.delete('/categories/:id', authenticateToken, async (req, res) => {
-  const { id } = req.params;
+  let { id } = req.params;
+  id = validator.trim(id);
 
   try {
     const { data, error } = await supabase
@@ -267,7 +310,11 @@ router.delete('/categories/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// Get all users
+/**
+ * Get all users.
+ * @route GET /users
+ * @access Private
+ */
 router.get('/users', authenticateToken, async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -284,7 +331,11 @@ router.get('/users', authenticateToken, async (req, res) => {
   }
 });
 
-// Share a note with a user
+/**
+ * Share a note with a user by ID.
+ * @route POST /notes/:id/share
+ * @access Private
+ */
 router.post('/notes/:id/share', authenticateToken, async (req, res) => {
   const { id } = req.params;
   const { userId } = req.body;
@@ -346,9 +397,15 @@ router.post('/notes/:id/share', authenticateToken, async (req, res) => {
   }
 });
 
-// Get users with access to a specific note
+
+/**
+ * Get users with access to a specific note.
+ * @route GET /notes/:id/users
+ * @access Private
+ */
 router.get('/notes/:id/users', authenticateToken, async (req, res) => {
-  const { id } = req.params;
+  let { id } = req.params;
+  id = validator.trim(id);
 
   try {
     const { data: users, error } = await supabase
@@ -372,13 +429,19 @@ router.get('/notes/:id/users', authenticateToken, async (req, res) => {
   }
 });
 
-// Remove user access from a note
+/**
+ * Remove user access from a note.
+ * @route DELETE /notes/:noteId/users/:userId
+ * @access Private
+ */
 router.delete('/notes/:noteId/users/:userId', authenticateToken, async (req, res) => {
-  const { noteId, userId } = req.params;
+  let { noteId, userId } = req.params;
   const { user_id: requestingUserId } = req.user;
 
+  noteId = validator.trim(noteId);
+  userId = validator.trim(userId);
+
   try {
-    // Check if the requesting user is the creator of the note
     const { data: creatorData, error: creatorError } = await supabase
       .from('user_notes')
       .select('is_creator')
@@ -392,7 +455,6 @@ router.delete('/notes/:noteId/users/:userId', authenticateToken, async (req, res
       return res.status(403).json({ error: 'Only the creator can remove user access' });
     }
 
-    // Remove the user's access
     const { data, error } = await supabase
       .from('user_notes')
       .delete()

@@ -1,0 +1,15 @@
+{
+  "name": "collab-server",
+  "version": "1.0.0",
+  "description": "Custom Collaborative WebSocket Server",
+  "main": "collabServer.js",
+  "type": "module",
+  "scripts": {
+    "start": "node collabServer.js"
+  },
+  "dependencies": {
+    "ws": "^8.13.0",
+    "yjs": "^13.5.30",
+    "lodash": "^4.17.21"
+  }
+}

@@ -1,5 +1,3 @@
-// server.js
-
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -45,20 +43,29 @@ if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
-// Use noteRoutes and userRoutes
 app.use('/api', noteRoutes);
 app.use('/api/users', userRoutes);
 
-const activeNotes = {}; // { noteId: { content: '', revision: 0, history: [Operation], cursors: { socketId: position } } }
+const activeNotes = {};
 
+/**
+ * Handles WebSocket connections for real-time collaboration.
+ * Upon a new connection, various events such as `join`, `update`, `cursor-update`, and `disconnect` are handled.
+ * The server maintains a state for active notes, where each note has content, revision history, and cursor positions.
+ */
 io.on('connection', (socket) => {
   console.log('A user connected:', socket.id);
 
+  /**
+   * Handles when a user joins a note for collaboration.
+   * If the note is not yet active, it fetches the note content from the database and initializes it.
+   * The current content, revision, and cursor positions are sent to the newly connected client.
+   * @param {string} noteId - The ID of the note to join.
+   */
   socket.on('join', async (noteId) => {
     console.log(`User ${socket.id} joined note: ${noteId}`);
     socket.join(noteId);
 
-    // Initialize activeNotes if not present
     if (!activeNotes[noteId]) {
       activeNotes[noteId] = { content: '', revision: 0, history: [], cursors: {} };
       try {
@@ -78,7 +85,6 @@ io.on('connection', (socket) => {
       }
     }
 
-    // Send current content, revision, and existing cursor positions to the newly joined client
     socket.emit('init', {
       content: activeNotes[noteId].content,
       revision: activeNotes[noteId].revision,
@@ -86,6 +92,13 @@ io.on('connection', (socket) => {
     });
   });
 
+  /**
+   * Handles updates made by users to the note content.
+   * Operations are transformed against concurrent operations and applied to the note's content.
+   * The transformed operations and new cursor position are broadcasted to other users in the same note.
+   * The changes are persisted to the database.
+   * @param {Object} data - Contains noteId, operations, revision, and cursor position.
+   */
   socket.on('update', ({ noteId, operations, revision, cursorPosition }) => {
     console.log(`Received update for note ${noteId} from ${socket.id}:`, { operations, revision, cursorPosition });
 
@@ -103,33 +116,26 @@ io.on('connection', (socket) => {
       return;
     }
 
-    // Get all operations that have been applied since the client's revision
     const concurrentOps = note.history.slice(revision);
     console.log(`Concurrent operations to transform against:`, concurrentOps);
 
-    // Transform the incoming operations against concurrent operations
     const transformedOps = transformOperations(operations, concurrentOps);
     console.log(`Transformed operations:`, transformedOps);
 
-    // Apply the transformed operations to the server's content
     try {
       const newContent = applyOperations(note.content, transformedOps);
       console.log(`New content after applying operations:`, newContent);
       note.content = newContent;
-      note.revision += transformedOps.length; // Increment revision by number of operations
+      note.revision += transformedOps.length;
 
-      // Add the transformed operations to the history
       note.history.push(...transformedOps);
       console.log(`Updated operation history:`, note.history);
 
-      // Update cursor position for the sender
       note.cursors[socket.id] = cursorPosition;
 
-      // Broadcast the transformed operations and updated revision to other clients
       socket.to(noteId).emit('update', { operations: transformedOps, revision: note.revision });
       socket.to(noteId).emit('cursor-update', { socketId: socket.id, cursorPosition });
 
-      // Persist the changes to Supabase
       supabase
         .from('notes')
         .update({ content: note.content, last_update: new Date().toISOString() })
@@ -148,23 +154,28 @@ io.on('connection', (socket) => {
     }
   });
 
+  /**
+   * Handles cursor position updates from users.
+   * Broadcasts the cursor position to other users in the same note.
+   * @param {Object} data - Contains noteId and cursor position.
+   */
   socket.on('cursor-update', ({ noteId, cursorPosition }) => {
     if (!activeNotes[noteId]) return;
 
-    // Update the cursor position for this socket
     activeNotes[noteId].cursors[socket.id] = cursorPosition;
-
-    // Broadcast the cursor position to other clients in the room
     socket.to(noteId).emit('cursor-update', { socketId: socket.id, cursorPosition });
   });
 
+  /**
+   * Handles the disconnection of a user.
+   * Removes the user's cursor from all notes they were participating in and broadcasts the removal to other users.
+   */
   socket.on('disconnect', () => {
     console.log('User disconnected:', socket.id);
-    // Remove the user's cursor positions from all notes
+
     for (const noteId in activeNotes) {
       if (activeNotes[noteId].cursors[socket.id]) {
         delete activeNotes[noteId].cursors[socket.id];
-        // Broadcast the cursor removal
         socket.to(noteId).emit('cursor-remove', { socketId: socket.id });
       }
     }
