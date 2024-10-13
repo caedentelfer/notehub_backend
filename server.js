@@ -2,26 +2,20 @@
 
 import express from 'express';
 import http from 'http';
-import { Server } from 'socket.io';
+import { WebSocketServer } from 'ws';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import noteRoutes from './routes/noteRoutes.js';
 import userRoutes from './routes/userRoutes.js';
 import { createClient } from '@supabase/supabase-js';
 import * as Y from 'yjs';
+import { setupWSConnection } from 'y-websocket/bin/utils';
 
 // Initialize environment variables
 dotenv.config();
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: {
-    origin: process.env.FRONTEND_URL || "http://localhost:3000",
-    methods: ["GET", "POST"],
-    credentials: true
-  }
-});
 
 const port = process.env.PORT || 3001;
 
@@ -53,21 +47,7 @@ if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
 // In-memory storage for Yjs documents
-const docs = {}; // { noteId: Y.Doc }
-
-// Client ID management
-let nextClientID = 1; // Unique numeric client ID generator
-const socketIDtoClientID = new Map(); // Maps socket.id (string) to clientID (number)
-
-// Helper function to generate random colors (optional)
-function getRandomColor() {
-  const letters = '0123456789ABCDEF';
-  let color = '#';
-  for (let i = 0; i < 6; i++) {
-    color += letters[Math.floor(Math.random() * 16)];
-  }
-  return color;
-}
+const docs = new Map(); // { noteId: Y.Doc }
 
 /**
  * Load Yjs document from Supabase
@@ -75,7 +55,7 @@ function getRandomColor() {
  * @returns {Y.Doc}
  */
 const loadDocument = async (noteId) => {
-  if (docs[noteId]) return docs[noteId];
+  if (docs.has(noteId)) return docs.get(noteId);
 
   const ydoc = new Y.Doc();
   try {
@@ -103,7 +83,7 @@ const loadDocument = async (noteId) => {
     console.error(`Error loading document ${noteId}:`, err);
   }
 
-  docs[noteId] = ydoc;
+  docs.set(noteId, ydoc);
   return ydoc;
 };
 
@@ -125,51 +105,29 @@ const persistDocument = async (noteId, ydoc) => {
   }
 };
 
-// Set up Yjs document update listeners for persistence
-io.on('connection', (socket) => {
-  console.log('A user connected:', socket.id);
+// Set up WebSocket server
+const wss = new WebSocketServer({ noServer: true });
 
-  socket.on('join', async (noteId) => {
-    console.log(`User ${socket.id} joined note: ${noteId}`);
-    socket.join(noteId);
-
-    const ydoc = await loadDocument(noteId);
-
-    // Assign a unique numeric clientID
-    const clientID = nextClientID++;
-    socketIDtoClientID.set(socket.id, clientID);
-
-    // Send initial document state to the client
-    const state = Y.encodeStateAsUpdate(ydoc);
-    socket.emit('yjs-update', state);
-
-    // Listen for document updates from this client
-    socket.on('yjs-update', (update) => {
-      Y.applyUpdate(ydoc, new Uint8Array(update));
-      // Broadcast the update to other clients in the same note
-      socket.to(noteId).emit('yjs-update', update);
-      // Persist the document
-      persistDocument(noteId, ydoc);
-    });
-
-    // Listen for cursor position updates from this client
-    socket.on('cursor-update', (cursorData) => {
-      // Broadcast the cursor position to other clients in the same note
-      socket.to(noteId).emit('cursor-update', {
-        clientID,
-        cursor: cursorData,
-      });
-    });
-
-    // Handle disconnection and clean up
-    socket.on('disconnect', () => {
-      console.log('User disconnected:', socket.id);
-      socketIDtoClientID.delete(socket.id);
-      // Optionally, notify other clients to remove this user's cursor
-      socket.to(noteId).emit('cursor-remove', { clientID });
-    });
-  });
+wss.on('connection', (ws, req) => {
+  setupWSConnection(ws, req, { docs: docs, awareness: {}, gc: true });
 });
+
+server.on('upgrade', (request, socket, head) => {
+  const handleAuth = (ws) => {
+    wss.emit('connection', ws, request);
+  };
+
+  wss.handleUpgrade(request, socket, head, handleAuth);
+});
+
+// Persistence interval (e.g., every 5 minutes)
+const PERSISTENCE_INTERVAL = 5 * 60 * 1000;
+
+setInterval(() => {
+  for (const [noteId, ydoc] of docs.entries()) {
+    persistDocument(noteId, ydoc);
+  }
+}, PERSISTENCE_INTERVAL);
 
 server.listen(port, () => {
   console.log(`Server running on port ${port}`);
