@@ -55,6 +55,10 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY
 // In-memory storage for Yjs documents
 const docs = {}; // { noteId: Y.Doc }
 
+// Client ID management
+let nextClientID = 1; // Unique numeric client ID generator
+const socketIDtoClientID = new Map(); // Maps socket.id (string) to clientID (number)
+
 // Helper function to generate random colors (optional)
 function getRandomColor() {
   const letters = '0123456789ABCDEF';
@@ -131,6 +135,10 @@ io.on('connection', (socket) => {
 
     const ydoc = await loadDocument(noteId);
 
+    // Assign a unique numeric clientID
+    const clientID = nextClientID++;
+    socketIDtoClientID.set(socket.id, clientID);
+
     // Send initial document state to the client
     const state = Y.encodeStateAsUpdate(ydoc);
     socket.emit('yjs-update', state);
@@ -143,11 +151,23 @@ io.on('connection', (socket) => {
       // Persist the document
       persistDocument(noteId, ydoc);
     });
-  });
 
-  socket.on('disconnect', () => {
-    console.log('User disconnected:', socket.id);
-    // No Awareness cleanup needed
+    // Listen for cursor position updates from this client
+    socket.on('cursor-update', (cursorData) => {
+      // Broadcast the cursor position to other clients in the same note
+      socket.to(noteId).emit('cursor-update', {
+        clientID,
+        cursor: cursorData,
+      });
+    });
+
+    // Handle disconnection and clean up
+    socket.on('disconnect', () => {
+      console.log('User disconnected:', socket.id);
+      socketIDtoClientID.delete(socket.id);
+      // Optionally, notify other clients to remove this user's cursor
+      socket.to(noteId).emit('cursor-remove', { clientID });
+    });
   });
 });
 
