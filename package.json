@@ -4,8 +4,7 @@
   "description": "",
   "main": "app.js",
   "scripts": {
-    "test": "jest",
-    "start": "node server.js"
+     "start": "concurrently \"node server.js\" \"npx y-websocket-server --port 1234\""
   },
   "keywords": [],
   "author": "",
