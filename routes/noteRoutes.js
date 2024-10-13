@@ -1,17 +1,20 @@
-const express = require('express');
-const router = express.Router();
-const { createClient } = require('@supabase/supabase-js');
-const dotenv = require('dotenv');
-const validator = require('validator');
-const authenticateToken = require('../middleware/authMiddleware');
+// backend/routes/noteRoutes.js
+
+import express from 'express';
+import { createClient } from '@supabase/supabase-js';
+import dotenv from 'dotenv';
+import validator from 'validator';
+import authenticateToken from '../middleware/authMiddleware.js'; // Ensure the path and extension are correct
 
 dotenv.config();
+
+const router = express.Router();
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
 /**
  * Get all notes for the authenticated user.
- * @route GET /notes
+ * @route GET /api/notes
  * @access Private
  */
 router.get('/notes', authenticateToken, async (req, res) => {
@@ -47,7 +50,7 @@ router.get('/notes', authenticateToken, async (req, res) => {
 
 /**
  * Get a specific note by ID.
- * @route GET /notes/:id
+ * @route GET /api/notes/:id
  * @access Private
  */
 router.get('/notes/:id', authenticateToken, async (req, res) => {
@@ -76,7 +79,7 @@ router.get('/notes/:id', authenticateToken, async (req, res) => {
 
 /**
  * Create a new note.
- * @route POST /notes
+ * @route POST /api/notes
  * @access Private
  */
 router.post('/notes', authenticateToken, async (req, res) => {
@@ -126,7 +129,7 @@ router.post('/notes', authenticateToken, async (req, res) => {
 
 /**
  * Update a note by ID.
- * @route PUT /notes/:id
+ * @route PUT /api/notes/:id
  * @access Private
  */
 router.put('/notes/:id', authenticateToken, async (req, res) => {
@@ -167,7 +170,7 @@ router.put('/notes/:id', authenticateToken, async (req, res) => {
 
 /**
  * Delete a note by ID.
- * @route DELETE /notes/:id
+ * @route DELETE /api/notes/:id
  * @access Private
  */
 router.delete('/notes/:id', authenticateToken, async (req, res) => {
@@ -205,7 +208,7 @@ router.delete('/notes/:id', authenticateToken, async (req, res) => {
 
 /**
  * Get all categories.
- * @route GET /categories
+ * @route GET /api/categories
  * @access Private
  */
 router.get('/categories', authenticateToken, async (req, res) => {
@@ -226,7 +229,7 @@ router.get('/categories', authenticateToken, async (req, res) => {
 
 /**
  * Create a new category.
- * @route POST /categories
+ * @route POST /api/categories
  * @access Private
  */
 router.post('/categories', authenticateToken, async (req, res) => {
@@ -255,7 +258,7 @@ router.post('/categories', authenticateToken, async (req, res) => {
 
 /**
  * Update a category by ID.
- * @route PUT /categories/:id
+ * @route PUT /api/categories/:id
  * @access Private
  */
 router.put('/categories/:id', authenticateToken, async (req, res) => {
@@ -288,7 +291,7 @@ router.put('/categories/:id', authenticateToken, async (req, res) => {
 
 /**
  * Delete a category by ID.
- * @route DELETE /categories/:id
+ * @route DELETE /api/categories/:id
  * @access Private
  */
 router.delete('/categories/:id', authenticateToken, async (req, res) => {
@@ -306,13 +309,13 @@ router.delete('/categories/:id', authenticateToken, async (req, res) => {
     res.json({ message: 'Category deleted successfully' });
   } catch (error) {
     console.error('Error deleting category:', error);
-    res.status(500).json({ error: 'An error occurred while deleting the category' });
+    res.status(500).json({ error: 'An error occurred while deleting the category', details: error.message });
   }
 });
 
 /**
  * Get all users.
- * @route GET /users
+ * @route GET /api/users
  * @access Private
  */
 router.get('/users', authenticateToken, async (req, res) => {
@@ -333,7 +336,7 @@ router.get('/users', authenticateToken, async (req, res) => {
 
 /**
  * Share a note with a user by ID.
- * @route POST /notes/:id/share
+ * @route POST /api/notes/:id/share
  * @access Private
  */
 router.post('/notes/:id/share', authenticateToken, async (req, res) => {
@@ -375,7 +378,7 @@ router.post('/notes/:id/share', authenticateToken, async (req, res) => {
       .eq('user_id', userId)
       .single();
 
-    if (existingShareError && existingShareError.code !== 'PGRST116') throw existingShareError;
+    if (existingShareError && existingShareError.code !== 'PGRST116') throw existingShareError; // PGRST116 = no data found
 
     if (existingShare) {
       return res.status(400).json({ error: 'Note is already shared with this user' });
@@ -384,7 +387,7 @@ router.post('/notes/:id/share', authenticateToken, async (req, res) => {
     // Add the user to the user_notes table
     const { data: sharedNote, error: shareError } = await supabase
       .from('user_notes')
-      .insert({ note_id: id, user_id: userId, is_creator: false })
+      .insert([{ note_id: id, user_id: userId, is_creator: false }])
       .select()
       .single();
 
@@ -397,10 +400,9 @@ router.post('/notes/:id/share', authenticateToken, async (req, res) => {
   }
 });
 
-
 /**
  * Get users with access to a specific note.
- * @route GET /notes/:id/users
+ * @route GET /api/notes/:id/users
  * @access Private
  */
 router.get('/notes/:id/users', authenticateToken, async (req, res) => {
@@ -431,7 +433,7 @@ router.get('/notes/:id/users', authenticateToken, async (req, res) => {
 
 /**
  * Remove user access from a note.
- * @route DELETE /notes/:noteId/users/:userId
+ * @route DELETE /api/notes/:noteId/users/:userId
  * @access Private
  */
 router.delete('/notes/:noteId/users/:userId', authenticateToken, async (req, res) => {
@@ -442,6 +444,7 @@ router.delete('/notes/:noteId/users/:userId', authenticateToken, async (req, res
   userId = validator.trim(userId);
 
   try {
+    // Check if the requester is the creator of the note
     const { data: creatorData, error: creatorError } = await supabase
       .from('user_notes')
       .select('is_creator')
@@ -470,4 +473,4 @@ router.delete('/notes/:noteId/users/:userId', authenticateToken, async (req, res
   }
 });
 
-module.exports = router;
+export default router;

@@ -1,13 +1,16 @@
-const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
-const cors = require('cors');
-const dotenv = require('dotenv');
-const noteRoutes = require('./routes/noteRoutes');
-const userRoutes = require('./routes/userRoutes');
-const { transformOperations, applyOperations } = require('./utils/ot');
-const { createClient } = require('@supabase/supabase-js');
+// server.js
 
+import express from 'express';
+import http from 'http';
+import { Server } from 'socket.io';
+import cors from 'cors';
+import dotenv from 'dotenv';
+import noteRoutes from './routes/noteRoutes.js';
+import userRoutes from './routes/userRoutes.js';
+import { createClient } from '@supabase/supabase-js';
+import * as Y from 'yjs';
+
+// Initialize environment variables
 dotenv.config();
 
 const app = express();
@@ -22,6 +25,7 @@ const io = new Server(server, {
 
 const port = process.env.PORT || 3001;
 
+// CORS Middleware
 app.use(cors({
   origin: new URL(process.env.FRONTEND_URL || "http://localhost:3000").origin,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -36,6 +40,11 @@ app.options('*', cors({
 
 app.use(express.json());
 
+// API Routes
+app.use('/api', noteRoutes);
+app.use('/api/users', userRoutes);
+
+// Supabase Client Initialization
 if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
   console.error('Supabase URL or Key is missing. Please check your .env file.');
   process.exit(1);
@@ -43,142 +52,102 @@ if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
-app.use('/api', noteRoutes);
-app.use('/api/users', userRoutes);
+// In-memory storage for Yjs documents
+const docs = {}; // { noteId: Y.Doc }
 
-const activeNotes = {};
+// Helper function to generate random colors (optional)
+function getRandomColor() {
+  const letters = '0123456789ABCDEF';
+  let color = '#';
+  for (let i = 0; i < 6; i++) {
+    color += letters[Math.floor(Math.random() * 16)];
+  }
+  return color;
+}
 
 /**
- * Handles WebSocket connections for real-time collaboration.
- * Upon a new connection, various events such as `join`, `update`, `cursor-update`, and `disconnect` are handled.
- * The server maintains a state for active notes, where each note has content, revision history, and cursor positions.
+ * Load Yjs document from Supabase
+ * @param {string} noteId 
+ * @returns {Y.Doc}
  */
+const loadDocument = async (noteId) => {
+  if (docs[noteId]) return docs[noteId];
+
+  const ydoc = new Y.Doc();
+  try {
+    const { data, error } = await supabase
+      .from('notes')
+      .select('content, yjs_state')
+      .eq('note_id', noteId)
+      .single();
+
+    if (error) throw error;
+
+    if (data.yjs_state) {
+      const decodedState = Buffer.from(data.yjs_state, 'base64');
+      Y.applyUpdate(ydoc, decodedState);
+    } else if (data.content) {
+      // Initialize Yjs document with existing content
+      ydoc.getText('content').insert(0, data.content);
+      const state = Buffer.from(Y.encodeStateAsUpdate(ydoc)).toString('base64');
+      await supabase
+        .from('notes')
+        .update({ yjs_state: state })
+        .eq('note_id', noteId);
+    }
+  } catch (err) {
+    console.error(`Error loading document ${noteId}:`, err);
+  }
+
+  docs[noteId] = ydoc;
+  return ydoc;
+};
+
+/**
+ * Persist Yjs document to Supabase
+ * @param {string} noteId 
+ * @param {Y.Doc} ydoc 
+ */
+const persistDocument = async (noteId, ydoc) => {
+  try {
+    const state = Buffer.from(Y.encodeStateAsUpdate(ydoc)).toString('base64');
+    await supabase
+      .from('notes')
+      .update({ yjs_state: state, last_update: new Date().toISOString() })
+      .eq('note_id', noteId);
+    console.log(`Persisted document ${noteId} to Supabase.`);
+  } catch (err) {
+    console.error(`Error persisting document ${noteId}:`, err);
+  }
+};
+
+// Set up Yjs document update listeners for persistence
 io.on('connection', (socket) => {
   console.log('A user connected:', socket.id);
 
-  /**
-   * Handles when a user joins a note for collaboration.
-   * If the note is not yet active, it fetches the note content from the database and initializes it.
-   * The current content, revision, and cursor positions are sent to the newly connected client.
-   * @param {string} noteId - The ID of the note to join.
-   */
   socket.on('join', async (noteId) => {
     console.log(`User ${socket.id} joined note: ${noteId}`);
     socket.join(noteId);
 
-    if (!activeNotes[noteId]) {
-      activeNotes[noteId] = { content: '', revision: 0, history: [], cursors: {} };
-      try {
-        const { data, error } = await supabase
-          .from('notes')
-          .select('content, last_update')
-          .eq('note_id', noteId)
-          .single();
+    const ydoc = await loadDocument(noteId);
 
-        if (error) throw error;
+    // Send initial document state to the client
+    const state = Y.encodeStateAsUpdate(ydoc);
+    socket.emit('yjs-update', state);
 
-        activeNotes[noteId].content = data.content;
-      } catch (err) {
-        console.error(`Exception fetching note ${noteId}:`, err);
-        socket.emit('error', 'An exception occurred while fetching note content.');
-        return;
-      }
-    }
-
-    socket.emit('init', {
-      content: activeNotes[noteId].content,
-      revision: activeNotes[noteId].revision,
-      cursors: activeNotes[noteId].cursors
+    // Listen for document updates from this client
+    socket.on('yjs-update', (update) => {
+      Y.applyUpdate(ydoc, new Uint8Array(update));
+      // Broadcast the update to other clients in the same note
+      socket.to(noteId).emit('yjs-update', update);
+      // Persist the document
+      persistDocument(noteId, ydoc);
     });
   });
 
-  /**
-   * Handles updates made by users to the note content.
-   * Operations are transformed against concurrent operations and applied to the note's content.
-   * The transformed operations and new cursor position are broadcasted to other users in the same note.
-   * The changes are persisted to the database.
-   * @param {Object} data - Contains noteId, operations, revision, and cursor position.
-   */
-  socket.on('update', ({ noteId, operations, revision, cursorPosition }) => {
-    console.log(`Received update for note ${noteId} from ${socket.id}:`, { operations, revision, cursorPosition });
-
-    if (!activeNotes[noteId]) {
-      console.error(`Note ${noteId} not found in activeNotes.`);
-      socket.emit('error', 'Note not found.');
-      return;
-    }
-
-    const note = activeNotes[noteId];
-
-    if (revision > note.revision) {
-      console.warn(`Client revision (${revision}) is ahead of server revision (${note.revision}).`);
-      socket.emit('error', 'Invalid revision number.');
-      return;
-    }
-
-    const concurrentOps = note.history.slice(revision);
-    console.log(`Concurrent operations to transform against:`, concurrentOps);
-
-    const transformedOps = transformOperations(operations, concurrentOps);
-    console.log(`Transformed operations:`, transformedOps);
-
-    try {
-      const newContent = applyOperations(note.content, transformedOps);
-      console.log(`New content after applying operations:`, newContent);
-      note.content = newContent;
-      note.revision += transformedOps.length;
-
-      note.history.push(...transformedOps);
-      console.log(`Updated operation history:`, note.history);
-
-      note.cursors[socket.id] = cursorPosition;
-
-      socket.to(noteId).emit('update', { operations: transformedOps, revision: note.revision });
-      socket.to(noteId).emit('cursor-update', { socketId: socket.id, cursorPosition });
-
-      supabase
-        .from('notes')
-        .update({ content: note.content, last_update: new Date().toISOString() })
-        .eq('note_id', noteId)
-        .then(({ data, error }) => {
-          if (error) {
-            console.error(`Error updating note ${noteId} in Supabase:`, error);
-            socket.emit('error', 'Failed to persist changes.');
-          } else {
-            console.log(`Successfully updated note ${noteId} in Supabase.`);
-          }
-        });
-    } catch (err) {
-      console.error(`Error applying operations for note ${noteId}:`, err);
-      socket.emit('error', 'Failed to apply operations.');
-    }
-  });
-
-  /**
-   * Handles cursor position updates from users.
-   * Broadcasts the cursor position to other users in the same note.
-   * @param {Object} data - Contains noteId and cursor position.
-   */
-  socket.on('cursor-update', ({ noteId, cursorPosition }) => {
-    if (!activeNotes[noteId]) return;
-
-    activeNotes[noteId].cursors[socket.id] = cursorPosition;
-    socket.to(noteId).emit('cursor-update', { socketId: socket.id, cursorPosition });
-  });
-
-  /**
-   * Handles the disconnection of a user.
-   * Removes the user's cursor from all notes they were participating in and broadcasts the removal to other users.
-   */
   socket.on('disconnect', () => {
     console.log('User disconnected:', socket.id);
-
-    for (const noteId in activeNotes) {
-      if (activeNotes[noteId].cursors[socket.id]) {
-        delete activeNotes[noteId].cursors[socket.id];
-        socket.to(noteId).emit('cursor-remove', { socketId: socket.id });
-      }
-    }
+    // No Awareness cleanup needed
   });
 });
 

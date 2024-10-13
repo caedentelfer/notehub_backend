@@ -1,13 +1,16 @@
-const express = require("express");
-const router = express.Router();
-const { createClient } = require("@supabase/supabase-js");
-const dotenv = require("dotenv");
-const bcrypt = require("bcrypt");
-const jwt = require("jsonwebtoken");
-const validator = require("validator");
-const authenticateToken = require('../middleware/authMiddleware');
+// backend/routes/userRoutes.js
+
+import express from 'express';
+import { createClient } from '@supabase/supabase-js';
+import dotenv from 'dotenv';
+import bcrypt from 'bcrypt';
+import jwt from 'jsonwebtoken';
+import validator from 'validator';
+import authenticateToken from '../middleware/authMiddleware.js'; // Ensure the path and extension are correct
 
 dotenv.config();
+
+const router = express.Router();
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -108,7 +111,7 @@ router.post("/login", async (req, res) => {
       .single();
 
     if (fetchError) {
-      if (fetchError.code === "PGRST116") {
+      if (fetchError.code === "PGRST116") { // Supabase specific code for no data
         return res.status(400).json({ error: "Invalid username or password." });
       }
       throw fetchError;
@@ -148,7 +151,9 @@ router.post("/login", async (req, res) => {
   }
 });
 
-const nodemailer = require("nodemailer");
+import nodemailer from 'nodemailer';
+
+// Configure Nodemailer transporter
 const transporter = nodemailer.createTransport({
   service: "gmail",
   auth: {
@@ -430,4 +435,4 @@ router.post("/change-image", async (req, res) => {
   }
 });
 
-module.exports = router;
+export default router;
