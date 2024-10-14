@@ -1,5 +1,3 @@
-// backend/middleware/authMiddleware.js
-
 import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
 
@@ -10,14 +8,16 @@ dotenv.config();
  * Extracts the token from the Authorization header and verifies it.
  * If valid, the decoded user information is attached to the request object.
  * If invalid or missing, it responds with an appropriate error.
- *    
+ * @param {Request} req - The request object
+ * @param {Response} res - The response object
+ * @param {NextFunction} next - The next middleware function  
  **/
 const authenticateToken = (req, res, next) => {
-  // Retrieve the Authorization header
+  /* Retrieve the Authorization header */
   const authHeader = req.headers["authorization"];
-  console.log("Authorization Header:", authHeader); // Debugging log
+  console.log("Authorization Header:", authHeader);
 
-  // Token is expected to be in the format "Bearer TOKEN"
+  /* Token is expected to be in the format "Bearer TOKEN" */
   const token = authHeader && authHeader.split(" ")[1];
 
   if (!token) {
@@ -25,16 +25,13 @@ const authenticateToken = (req, res, next) => {
     return res.status(401).json({ error: "Access denied. No token provided." });
   }
 
-  // Verify the token
+  /*Verify the token using the JWT secret key */
   jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
     if (err) {
       console.error("Token verification failed:", err.message);
       return res.status(403).json({ error: "Invalid or expired token." });
     }
-
-    console.log("Authenticated User:", decoded); // Debugging log
-
-    // Attach decoded user information to the request object
+    console.log("Authenticated User:", decoded); 
     req.user = decoded;
     next();
   });

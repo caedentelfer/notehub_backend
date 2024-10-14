@@ -1,5 +1,3 @@
-// server.js
-
 import express from 'express';
 import http from 'http';
 import { WebSocketServer } from 'ws';
@@ -19,7 +17,7 @@ const server = http.createServer(app);
 
 const port = process.env.PORT || 3001;
 
-// CORS Middleware
+// CORS Middleware Configuration
 app.use(cors({
   origin: new URL(process.env.FRONTEND_URL || "http://localhost:3000").origin,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -32,6 +30,7 @@ app.options('*', cors({
   credentials: true
 }));
 
+// Middleware to parse JSON bodies
 app.use(express.json());
 
 // API Routes
@@ -47,12 +46,12 @@ if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
 // In-memory storage for Yjs documents
-const docs = new Map(); // { noteId: Y.Doc }
+const docs = new Map();
 
 /**
- * Load Yjs document from Supabase
- * @param {string} noteId 
- * @returns {Y.Doc}
+ * Load Yjs document from Supabase.
+ * @param {string} noteId - The ID of the note to load.
+ * @returns {Promise<Y.Doc>} - The loaded Yjs document.
  */
 const loadDocument = async (noteId) => {
   if (docs.has(noteId)) return docs.get(noteId);
@@ -88,9 +87,9 @@ const loadDocument = async (noteId) => {
 };
 
 /**
- * Persist Yjs document to Supabase
- * @param {string} noteId 
- * @param {Y.Doc} ydoc 
+ * Persist Yjs document to Supabase.
+ * @param {string} noteId - The ID of the note to persist.
+ * @param {Y.Doc} ydoc - The Yjs document to persist.
  */
 const persistDocument = async (noteId, ydoc) => {
   try {
@@ -129,6 +128,7 @@ setInterval(() => {
   }
 }, PERSISTENCE_INTERVAL);
 
+// Start the server
 server.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });
