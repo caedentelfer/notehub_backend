@@ -7,6 +7,7 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import validator from 'validator';
 import authenticateToken from '../middleware/authMiddleware.js'; // Ensure the path and extension are correct
+import nodemailer from 'nodemailer';
 
 dotenv.config();
 
@@ -60,9 +61,11 @@ router.post("/register", async (req, res) => {
       }
     }
 
+    /*hash / encrypt password using bcrypt*/
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(password, saltRounds);
 
+    /*insert new user in db*/
     const { data, error } = await supabase
       .from("users")
       .insert([
@@ -94,16 +97,13 @@ router.post("/register", async (req, res) => {
  * @access Public
  */
 router.post("/login", async (req, res) => {
+  const { username, password, rememberMe } = req.body;
+
+  if (!username || !password) {
+    return res.status(400).json({ error: "Username and password are required." });
+  }
+
   try {
-    let { username, password } = req.body;
-
-    username = typeof username === 'string' ? validator.trim(username) : '';
-    password = typeof password === 'string' ? validator.trim(password) : '';
-
-    if (!username || !password) {
-      return res.status(400).json({ error: "Username and password are required." });
-    }
-
     const { data: user, error: fetchError } = await supabase
       .from("users")
       .select("*")
@@ -128,9 +128,8 @@ router.post("/login", async (req, res) => {
       email: user.email,
     };
 
-    const token = jwt.sign(payload, process.env.JWT_SECRET, {
-      expiresIn: "1h",
-    });
+    const expiresIn = rememberMe ? '5h' : '1h';
+    const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn });
 
     res.status(200).json({
       message: "Login successful.",
@@ -151,7 +150,68 @@ router.post("/login", async (req, res) => {
   }
 });
 
-import nodemailer from 'nodemailer';
+
+/**
+ * Refresh the user token
+ * @route POST /api/users/refresh-token
+ * @access Public
+ */
+router.post("/refresh-token", async (req, res) => {
+  const token = req.headers.authorization?.split(" ")[1];
+
+  if (!token) {
+    return res.status(401).json({ error: "No token provided" });
+  }
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const newToken = jwt.sign(
+      {
+        user_id: decoded.user_id,
+        username: decoded.username,
+        email: decoded.email,
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "1h" }
+    );
+
+    res.json({ token: newToken });
+  } catch (error) {
+    res.status(401).json({ error: "Invalid or expired token" });
+  }
+});
+
+
+/**
+ * Refresh the user token
+ * @route POST /api/users/refresh-token
+ * @access Public
+ */
+router.post("/refresh-token", async (req, res) => {
+  const token = req.headers.authorization?.split(" ")[1];
+
+  if (!token) {
+    return res.status(401).json({ error: "No token provided" });
+  }
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const newToken = jwt.sign(
+      {
+        user_id: decoded.user_id,
+        username: decoded.username,
+        email: decoded.email,
+      },
+      process.env.JWT_SECRET,
+      { expiresIn: "1h" }
+    );
+
+    res.json({ token: newToken });
+  } catch (error) {
+    res.status(401).json({ error: "Invalid or expired token" });
+  }
+});
+
 
 // Configure Nodemailer transporter
 const transporter = nodemailer.createTransport({
@@ -190,17 +250,22 @@ router.post("/reset-password", async (req, res) => {
       return res.status(404).json({ error: "User not found." });
     }
 
+    /*use JWT tokens for verification*/
     const token = jwt.sign({ email: user.email }, process.env.JWT_SECRET, {
+      expiresIn: "1h",
       expiresIn: "1h",
     });
 
+    console.log("Generated Token:", token); /*debug logging*/
+
+    /*link attached in email to reset password*/ //TODO might need to change LINK
     const resetLink = `http://localhost:3000/pages/update-password?token=${token}`;
 
     await transporter.sendMail({
       from: process.env.EMAIL_USER,
       to: email,
       subject: "Password Reset Instructions - NoteHub",
-      text: `To reset your password, click the link below:\n\n${resetLink}`,
+      text: `Please click the link below in order to reset your password:\n\n${resetLink}`,
     });
 
     res.status(200).json({
@@ -223,20 +288,22 @@ router.use(authenticateToken);
  * @access Private
  */
 router.post("/update-password", async (req, res) => {
+
+  let { email, newPassword } = req.body;
+
+  email = typeof email === 'string' ? validator.normalizeEmail(email) : '';
+  newPassword = typeof newPassword === 'string' ? validator.trim(newPassword) : '';
+
+  if (!email || !newPassword) {
+    return res.status(400).json({ error: "Email and new password are required." });
+  }
+
+  if (!validator.isEmail(email)) {
+    return res.status(400).json({ error: "Invalid email format." });
+  }
+
   try {
-    let { email, newPassword } = req.body;
-
-    email = typeof email === 'string' ? validator.normalizeEmail(email) : '';
-    newPassword = typeof newPassword === 'string' ? validator.trim(newPassword) : '';
-
-    if (!email || !newPassword) {
-      return res.status(400).json({ error: "Email and new password are required." });
-    }
-
-    if (!validator.isEmail(email)) {
-      return res.status(400).json({ error: "Invalid email format." });
-    }
-
+    /*Hash new password for encryption*/
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
 
@@ -251,9 +318,9 @@ router.post("/update-password", async (req, res) => {
 
     res.status(200).json({ message: "Password updated successfully." });
   } catch (error) {
-    console.error("Error updating password:", error);
+    console.error("Error updating password:", error); /*debug logging*/
     res.status(500).json({
-      error: "An error occurred while updating the password.",
+      error: "Error occurred while updating the password.",
       details: error.message,
     });
   }
@@ -285,16 +352,18 @@ router.post("/verify-password", async (req, res) => {
       return res.status(404).json({ error: "User not found." });
     }
 
+    /*Compare provided password with encrypted password in db*/
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       return res.status(401).json({ error: "Incorrect password." });
     }
 
+    /*if valid, successful */
     res.status(200).json({ isValid: true });
   } catch (error) {
     console.error("Error verifying password:", error);
     res.status(500).json({
-      error: "An error occurred while verifying the password.",
+      error: "Error occurred while verifying the password.",
       details: error.message,
     });
   }
@@ -339,7 +408,7 @@ router.post("/change-email", async (req, res) => {
   } catch (error) {
     console.error("Error changing email:", error);
     res.status(500).json({
-      error: "An error occurred while changing the email.",
+      error: "Error occurred while changing user email.",
       details: error.message,
     });
   }
@@ -351,16 +420,17 @@ router.post("/change-email", async (req, res) => {
  * @access Private
  */
 router.post("/change-username", async (req, res) => {
+
+  let { userId, newUsername } = req.body;
+
+  userId = typeof userId === 'string' ? validator.trim(userId) : userId;
+  newUsername = typeof newUsername === 'string' ? validator.trim(newUsername) : '';
+
+  if (!userId || !newUsername) {
+    return res.status(400).json({ error: "User ID and new username are required." });
+  }
+
   try {
-    let { userId, newUsername } = req.body;
-
-    userId = typeof userId === 'string' ? validator.trim(userId) : userId;
-    newUsername = typeof newUsername === 'string' ? validator.trim(newUsername) : '';
-
-    if (!userId || !newUsername) {
-      return res.status(400).json({ error: "User ID and new username are required." });
-    }
-
     const { data: user, error: userError } = await supabase
       .from("users")
       .select("*")
@@ -384,7 +454,7 @@ router.post("/change-username", async (req, res) => {
   } catch (error) {
     console.error("Error changing username:", error);
     res.status(500).json({
-      error: "An error occurred while changing the username.",
+      error: "Error occurred while changing username.",
       details: error.message,
     });
   }
@@ -425,11 +495,66 @@ router.post("/change-image", async (req, res) => {
       throw updateError;
     }
 
-    res.status(200).json({ message: "Profile image changed successfully." });
+    res.status(200).json({ message: "User avatar changed successfully." });
   } catch (error) {
-    console.error("Error changing profile image:", error);
+    console.error("Error changing user avatar:", error);
     res.status(500).json({
-      error: "An error occurred while changing the profile image.",
+      error: "Error occurred while changing user avatar.",
+      details: error.message,
+    });
+  }
+});
+
+/**
+ * @route   POST /api/users/delete
+ * @desc    Delete a user and their associated notes from the database
+ * @access  Public
+ */
+router.post("/delete", async (req, res) => {
+  const { userId } = req.body;
+
+  if (!userId) {
+    return res.status(400).json({ error: "UserId is required." });
+  }
+
+  try {
+    const { data: user, error: userError } = await supabase
+      .from("users")
+      .select("*")
+      .eq("user_id", userId)
+      .single();
+
+    if (userError || !user) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    /*Delete all notes associated with userId in user_notes table*/
+    const { error: deleteNotesError } = await supabase
+      .from("user_notes")
+      .delete()
+      .eq("user_id", userId);
+
+    if (deleteNotesError) {
+      throw deleteNotesError;
+    }
+
+    /*finally delete user from the db*/
+    const { error: deleteUserError } = await supabase
+      .from("users")
+      .delete()
+      .eq("user_id", userId);
+
+    if (deleteUserError) {
+      throw deleteUserError;
+    }
+
+    res
+      .status(200)
+      .json({ message: "User and associated have been deleted successfully " });
+  } catch (error) {
+    console.error("Error deleting user and notes:", error);
+    res.status(500).json({
+      error: "Error occurred while deleting user.",
       details: error.message,
     });
   }

@@ -1,13 +1,3 @@
-// backend/utils/ot.js
-
-/**
- * Represents a single operation.
- * @typedef {Object} Operation
- * @property {number} position - The position in the text.
- * @property {number} [delete] - Number of characters to delete.
- * @property {string} [insert] - String to insert.
- */
-
 /**
  * Transforms a single operation against another single operation.
  * @param {Operation} op1 - The first operation.

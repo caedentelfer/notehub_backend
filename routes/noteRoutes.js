@@ -287,6 +287,7 @@ router.put('/categories/:id', authenticateToken, async (req, res) => {
     console.error('Error updating category:', error);
     res.status(500).json({ error: 'An error occurred while updating the category', details: error.message });
   }
+
 });
 
 /**
