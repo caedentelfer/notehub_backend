@@ -64,7 +64,7 @@ router.post("/register", async (req, res) => {
 
     /*hash / encrypt password using bcrypt*/
     const saltRounds = 10;
-    const hashedPassword = await bcrypt.hash(password, saltRounds); 
+    const hashedPassword = await bcrypt.hash(password, saltRounds);
 
     /*insert new user in db*/
     const { data, error } = await supabase
@@ -128,7 +128,7 @@ router.post("/login", async (req, res) => {
       return res.status(400).json({ error: "Invalid username or password." });
     }
     /*create payload for jwt token*/
-    const payload = { 
+    const payload = {
       user_id: user.user_id,
       username: user.username,
       email: user.email,
@@ -139,7 +139,7 @@ router.post("/login", async (req, res) => {
     const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn });
 
     /*send token and user data in response*/
-    res.status(200).json({ 
+    res.status(200).json({
       message: "Login successful.",
       token,
       user: {
@@ -204,7 +204,7 @@ const transporter = nodemailer.createTransport({
  */
 router.post("/reset-password", async (req, res) => {
   try {
-    
+
     let { email } = req.body;
     email = typeof email === "string" ? validator.normalizeEmail(email) : ""; /* Sanitization of email */
 
@@ -235,7 +235,7 @@ router.post("/reset-password", async (req, res) => {
     console.log("Generated Token:", token); /*debug logging*/
 
     /*link attached in email to reset password*/ //TODO might need to change LINK
-    const resetLink = `http://localhost:3000/pages/update-password?token=${token}`;
+    const resetLink = `https://notehub-backend-un27.onrender.com/pages/update-password?token=${token}`;
 
     await transporter.sendMail({
       from: process.env.EMAIL_USER,
@@ -268,7 +268,7 @@ router.post("/update-password", async (req, res) => {
 
   email = typeof email === "string" ? validator.normalizeEmail(email) : ""; /* Sanitization of email */
   newPassword = typeof newPassword === "string" ? validator.trim(newPassword) : ""; /* Sanitization of password */
- 
+
   if (!email || !newPassword) {
     return res
       .status(400)
@@ -414,7 +414,7 @@ router.post("/change-username", async (req, res) => {
 
   try {
     const { data: user, error: userError } = await supabase /*fetch user from db*/
-      .from("users") 
+      .from("users")
       .select("*")
       .eq("user_id", userId)
       .single();

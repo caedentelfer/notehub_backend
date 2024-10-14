@@ -1,6 +1,11 @@
-const request = require('supertest');
+/*const request = require('supertest');
 const app = require('../server');  // Adjust this path if necessary
-const { v4: uuidv4 } = require('uuid');
+const { v4: uuidv4 } = require('uuid');*/
+
+import request from 'supertest';
+import {app, server} from '../server';  // Adjust this path if necessary
+import { v4 as uuidv4 } from 'uuid';
+
 
 describe('User API', () => {
   let testUser;
@@ -60,5 +65,9 @@ describe('User API', () => {
     authToken = res.body.token;
   });
 
+  afterAll(() => {
+    // Add this to close the server if you're using one in the tests
+    server.close();
+  });
   
 });
