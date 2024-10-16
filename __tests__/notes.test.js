@@ -1,9 +1,5 @@
-/*const request = require('supertest');
-const app = require('../server');  // Adjust this path if necessary
-const { v4: uuidv4 } = require('uuid');*/
-
 import request from 'supertest';
-import {app, server} from '../server';  // Adjust this path if necessary
+import {app, server} from '../server';
 import { v4 as uuidv4 } from 'uuid';
 
 
@@ -65,8 +61,81 @@ describe('User API', () => {
     authToken = res.body.token;
   });
 
+  it('should not allow registering with an existing username or email', async () => {
+    const res = await request(app)
+      .post('/api/users/register')
+      .send({
+        username: testUser.username,  // Use the same username as the test user
+        email: testUser.email,        // Use the same email as the test user
+        password: 'anotherPassword123!'
+      });
+  
+    expect(res.statusCode).toEqual(400);  //400 is used for bad request
+    expect(res.body).toHaveProperty('error', 'Username already exists.');
+  });
+  
+  it('should not login with incorrect credentials', async () => {
+    const res = await request(app)
+      .post('/api/users/login')
+      .send({
+        username: testUser.username,
+        password: 'wrongPassword'
+      });
+  
+    expect(res.statusCode).toEqual(400);
+    expect(res.body).toHaveProperty('error', 'Invalid username or password.');
+  });
+
+  it('should not allow access to the user profile without a token', async () => {
+    const res = await request(app)
+      .get(`/api/users/profile`);  
+  
+    expect(res.statusCode).toEqual(401);  // 401 is used for unauthorized
+    expect(res.body).toHaveProperty('error', 'Access denied. No token provided.');
+  });
+
+  it('should not allow registering with an invalid email format', async () => {
+    const res = await request(app)
+      .post('/api/users/register')
+      .send({
+        username: `testuser${uuidv4().replace(/-/g, '')}`,
+        email: 'invalidemail',  // Invalid email format
+        password: 'testPassword123!'
+      });
+  
+    expect(res.statusCode).toEqual(400);  
+    expect(res.body).toHaveProperty('error', 'Invalid email format.');
+  });
+  
+
+  it('should not allow registering with missing fields', async () => {
+    const res = await request(app)
+      .post('/api/users/register')
+      .send({
+        email: `testuser_${uuidv4()}@example.com`,
+        password: 'testPassword123!'
+      });
+  
+    expect(res.statusCode).toEqual(400);  
+    expect(res.body).toHaveProperty('error', 'Username, email, and password are required.');
+  });
+
+  it('should allow registering with a strong password', async () => {
+    const res = await request(app)
+      .post('/api/users/register')
+      .send({
+        username: `testuser${uuidv4().replace(/-/g, '')}`,
+        email: `testuser_${uuidv4()}@example.com`,
+        password: '$$Tr0ngPa$$w0%d'  // strong password
+      });
+  
+    expect(res.statusCode).toEqual(201);
+    expect(res.body).toHaveProperty('message', 'User registered successfully.');
+  });
+
+
   afterAll(() => {
-    // Add this to close the server if you're using one in the tests
+    // Add this to close the server
     server.close();
   });
   

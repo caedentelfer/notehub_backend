@@ -9,7 +9,6 @@ import { createClient } from '@supabase/supabase-js';
 import * as Y from 'yjs';
 import { setupWSConnection } from 'y-websocket/bin/utils';
 
-// Initialize environment variables
 dotenv.config();
 
 const app = express();
@@ -17,7 +16,6 @@ const server = http.createServer(app);
 
 const port = process.env.PORT || 3001;
 
-// CORS Middleware Configuration
 app.use(cors({
   origin: new URL(process.env.FRONTEND_URL || "http://localhost:3000").origin,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -30,7 +28,6 @@ app.options('*', cors({
   credentials: true
 }));
 
-// Middleware to parse JSON bodies
 app.use(express.json());
 
 // API Routes
@@ -45,7 +42,6 @@ if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
-// In-memory storage for Yjs documents
 const docs = new Map();
 
 /**
@@ -104,13 +100,14 @@ const persistDocument = async (noteId, ydoc) => {
   }
 };
 
-// Set up WebSocket server
+// Load Yjs documents from Supabase
 const wss = new WebSocketServer({ noServer: true });
 
 wss.on('connection', (ws, req) => {
   setupWSConnection(ws, req, { docs: docs, awareness: {}, gc: true });
 });
 
+// Handle WebSocket upgrade requests
 server.on('upgrade', (request, socket, head) => {
   const handleAuth = (ws) => {
     wss.emit('connection', ws, request);
@@ -119,7 +116,7 @@ server.on('upgrade', (request, socket, head) => {
   wss.handleUpgrade(request, socket, head, handleAuth);
 });
 
-// Persistence interval (e.g., every 5 minutes)
+// Persistence interval
 const PERSISTENCE_INTERVAL = 5 * 60 * 1000;
 
 setInterval(() => {
@@ -128,7 +125,6 @@ setInterval(() => {
   }
 }, PERSISTENCE_INTERVAL);
 
-// Start the server
 server.listen(port, () => {
   console.log(`Server running on port ${port}`);
 });

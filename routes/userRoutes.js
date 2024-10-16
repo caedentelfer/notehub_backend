@@ -232,7 +232,7 @@ router.post("/reset-password", async (req, res) => {
       expiresIn: "1h",
     });
 
-    console.log("Generated Token:", token); /*debug logging*/
+    console.log("Generated Token:", token);
 
     /*link attached in email to reset password*/ //TODO might need to change LINK
     const resetLink = `https://notehub-backend-un27.onrender.com/pages/update-password?token=${token}`;
@@ -266,8 +266,8 @@ router.use(authenticateToken);
 router.post("/update-password", async (req, res) => {
   let { email, newPassword } = req.body;
 
-  email = typeof email === "string" ? validator.normalizeEmail(email) : ""; /* Sanitization of email */
-  newPassword = typeof newPassword === "string" ? validator.trim(newPassword) : ""; /* Sanitization of password */
+  email = typeof email === "string" ? validator.normalizeEmail(email) : "";
+  newPassword = typeof newPassword === "string" ? validator.trim(newPassword) : "";
 
   if (!email || !newPassword) {
     return res
@@ -280,11 +280,10 @@ router.post("/update-password", async (req, res) => {
   }
 
   try {
-    /*Hash new password for encryption*/
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
 
-    const { data, error } = await supabase /*update password in db*/
+    const { data, error } = await supabase
       .from("users")
       .update({ password: hashedPassword })
       .eq("email", email);
@@ -295,7 +294,7 @@ router.post("/update-password", async (req, res) => {
 
     res.status(200).json({ message: "Password updated successfully." });
   } catch (error) {
-    console.error("Error updating password:", error); /*debug logging*/
+    console.error("Error updating password:", error);
     res.status(500).json({
       error: "Error occurred while updating the password.",
       details: error.message,
@@ -312,8 +311,8 @@ router.post("/verify-password", async (req, res) => {
   try {
     let { userId, password } = req.body;
 
-    userId = typeof userId === "string" ? validator.trim(userId) : userId; /* Sanitization of userId */
-    password = typeof password === "string" ? validator.trim(password) : password; /* Sanitization of password */
+    userId = typeof userId === "string" ? validator.trim(userId) : userId;
+    password = typeof password === "string" ? validator.trim(password) : password;
 
     if (!userId || !password) {
       return res
@@ -357,8 +356,8 @@ router.post("/change-email", async (req, res) => {
   try {
     let { userId, newEmail } = req.body;
 
-    userId = typeof userId === "string" ? validator.trim(userId) : userId; /* Sanitization of userId */
-    newEmail = typeof newEmail === "string" ? validator.normalizeEmail(newEmail) : ""; /* Sanitization of email */
+    userId = typeof userId === "string" ? validator.trim(userId) : userId;
+    newEmail = typeof newEmail === "string" ? validator.normalizeEmail(newEmail) : "";
 
     if (!userId || !newEmail) {
       return res
@@ -366,7 +365,7 @@ router.post("/change-email", async (req, res) => {
         .json({ error: "User ID and new email address are required" });
     }
 
-    const { data: user, error: userError } = await supabase /*fetch user from db*/
+    const { data: user, error: userError } = await supabase
       .from("users")
       .select("*")
       .eq("user_id", userId)
@@ -376,7 +375,7 @@ router.post("/change-email", async (req, res) => {
       return res.status(404).json({ error: "User not found." });
     }
 
-    const { error: updateError } = await supabase /*update email in db*/
+    const { error: updateError } = await supabase
       .from("users")
       .update({ email: newEmail })
       .eq("user_id", userId);
@@ -403,8 +402,8 @@ router.post("/change-email", async (req, res) => {
 router.post("/change-username", async (req, res) => {
   let { userId, newUsername } = req.body;
 
-  userId = typeof userId === "string" ? validator.trim(userId) : userId; /* Sanitization of userId */
-  newUsername = typeof newUsername === "string" ? validator.trim(newUsername) : ""; /* Sanitization of username */
+  userId = typeof userId === "string" ? validator.trim(userId) : userId;
+  newUsername = typeof newUsername === "string" ? validator.trim(newUsername) : "";
 
   if (!userId || !newUsername) {
     return res
@@ -413,7 +412,7 @@ router.post("/change-username", async (req, res) => {
   }
 
   try {
-    const { data: user, error: userError } = await supabase /*fetch user from db*/
+    const { data: user, error: userError } = await supabase
       .from("users")
       .select("*")
       .eq("user_id", userId)
@@ -423,7 +422,7 @@ router.post("/change-username", async (req, res) => {
       return res.status(404).json({ error: "User not found." });
     }
 
-    const { error: updateError } = await supabase /*update username in db*/
+    const { error: updateError } = await supabase
       .from("users")
       .update({ username: newUsername })
       .eq("user_id", userId);
@@ -451,8 +450,8 @@ router.post("/change-image", async (req, res) => {
   try {
     let { userId, newProfileImageUrl } = req.body;
 
-    userId = typeof userId === "string" ? validator.trim(userId) : userId; /* Sanitization of userId */
-    newProfileImageUrl = typeof newProfileImageUrl === "string" ? validator.trim(newProfileImageUrl) : ""; /* Sanitization of URL */
+    userId = typeof userId === "string" ? validator.trim(userId) : userId;
+    newProfileImageUrl = typeof newProfileImageUrl === "string" ? validator.trim(newProfileImageUrl) : "";
 
     if (!userId || !newProfileImageUrl) {
       return res
@@ -460,7 +459,7 @@ router.post("/change-image", async (req, res) => {
         .json({ error: "User ID and new profile image URL are required." });
     }
 
-    const { data: user, error: userError } = await supabase /*fetch user from db*/
+    const { data: user, error: userError } = await supabase
       .from("users")
       .select("*")
       .eq("user_id", userId)
@@ -470,7 +469,7 @@ router.post("/change-image", async (req, res) => {
       return res.status(404).json({ error: "User not found." });
     }
 
-    const { error: updateError } = await supabase /*update profile image URL in db*/
+    const { error: updateError } = await supabase
       .from("users")
       .update({ user_avatar: newProfileImageUrl })
       .eq("user_id", userId);
@@ -502,7 +501,7 @@ router.post("/delete", async (req, res) => {
   }
 
   try {
-    const { data: user, error: userError } = await supabase /*fetch user from db*/
+    const { data: user, error: userError } = await supabase
       .from("users")
       .select("*")
       .eq("user_id", userId)

@@ -1,8 +1,8 @@
 import express from 'express';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
-import validator from 'validator'; 
-import authenticateToken from '../middleware/authMiddleware.js'; 
+import validator from 'validator';
+import authenticateToken from '../middleware/authMiddleware.js';
 
 dotenv.config();
 
@@ -18,20 +18,20 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY
 router.get('/notes', authenticateToken, async (req, res) => {
   try {
     const { user_id } = req.user;
-    const { data: userNotes, error: userNotesError } = await supabase /* Get all notes for the authenticated user. */
+    const { data: userNotes, error: userNotesError } = await supabase
       .from('user_notes')
       .select('note_id')
       .eq('user_id', user_id);
 
     if (userNotesError) throw userNotesError;
 
-    const noteIds = userNotes.map(un => un.note_id); /* Extract note IDs from the user_notes data. */
+    const noteIds = userNotes.map(un => un.note_id);
 
-    if (noteIds.length === 0) { 
+    if (noteIds.length === 0) {
       return res.json([]);
     }
 
-    const { data: notes, error: notesError } = await supabase /* Get all notes with the extracted note IDs. */
+    const { data: notes, error: notesError } = await supabase
       .from('notes')
       .select('*')
       .in('note_id', noteIds)
@@ -53,10 +53,10 @@ router.get('/notes', authenticateToken, async (req, res) => {
  */
 router.get('/notes/:id', authenticateToken, async (req, res) => {
   let { id } = req.params;
-  id = validator.trim(id); /* Sanitize the IDs */
+  id = validator.trim(id);
 
   try {
-    const { data, error } = await supabase /* Get the note by ID. */
+    const { data, error } = await supabase
       .from('notes')
       .select('*')
       .eq('note_id', id)
@@ -84,14 +84,14 @@ router.post('/notes', authenticateToken, async (req, res) => {
   let { title, content, category_id, tags } = req.body;
   const { user_id } = req.user;
 
-  title = validator.trim(title); /* Sanitize the title */
-  content = validator.trim(content); /* Sanitize the content */
-  category_id = typeof category_id === 'string' ? validator.trim(category_id) : category_id; /* Sanitize the catagory_ids */
+  title = validator.trim(title);
+  content = validator.trim(content);
+  category_id = typeof category_id === 'string' ? validator.trim(category_id) : category_id;
 
   try {
     let categoryId = category_id;
 
-    if (typeof category_id === 'string' && !Number.isInteger(Number(category_id))) { /* Check if the category_id is a string and not a number */
+    if (typeof category_id === 'string' && !Number.isInteger(Number(category_id))) {
       const { data: newCategory, error: categoryError } = await supabase
         .from('categories')
         .insert({ name: category_id })
@@ -110,7 +110,7 @@ router.post('/notes', authenticateToken, async (req, res) => {
 
     if (noteError) throw noteError;
 
-    const { data: userNote, error: userNoteError } = await supabase /* Add the note to the user_notes table. */
+    const { data: userNote, error: userNoteError } = await supabase
       .from('user_notes')
       .insert([{ note_id: newNote.note_id, user_id, is_creator: true }])
       .select()
@@ -130,17 +130,17 @@ router.post('/notes', authenticateToken, async (req, res) => {
  * @route PUT /api/notes/:id
  * @access Private
  */
-router.put('/notes/:id', authenticateToken, async (req, res) => { 
+router.put('/notes/:id', authenticateToken, async (req, res) => {
   let { id } = req.params;
   let { title, content, category_id, tags } = req.body;
 
-  id = validator.trim(id);  /* Sanitize the IDs */
-  title = validator.trim(title); /* Sanitize the title */
-  content = validator.trim(content);  /* Sanitize the content */
-  category_id = typeof category_id === 'string' ? validator.trim(category_id) : category_id; /* Sanitize the category_id */
+  id = validator.trim(id);
+  title = validator.trim(title);
+  content = validator.trim(content);
+  category_id = typeof category_id === 'string' ? validator.trim(category_id) : category_id;
 
   try {
-    const { data, error } = await supabase /* Update the note by ID. */
+    const { data, error } = await supabase
       .from('notes')
       .update({
         title,
@@ -173,24 +173,24 @@ router.put('/notes/:id', authenticateToken, async (req, res) => {
  */
 router.delete('/notes/:id', authenticateToken, async (req, res) => {
   let { id } = req.params;
-  id = validator.trim(id); /* Sanitize the IDs */
+  id = validator.trim(id);
 
   try {
-    const { error: userNotesDeleteError } = await supabase /* Delete the note from the user_notes table. */
+    const { error: userNotesDeleteError } = await supabase
       .from('user_notes')
       .delete()
       .eq('note_id', id);
 
     if (userNotesDeleteError) throw userNotesDeleteError;
 
-    const { error: noteSharingDeleteError } = await supabase /* Delete the note from the note_sharing table. */
+    const { error: noteSharingDeleteError } = await supabase
       .from('note_sharing')
       .delete()
       .eq('note_id', id);
 
     if (noteSharingDeleteError) throw noteSharingDeleteError;
 
-    const { error: noteDeleteError } = await supabase /* Delete the note by ID. */
+    const { error: noteDeleteError } = await supabase
       .from('notes')
       .delete()
       .eq('note_id', id);
@@ -211,7 +211,7 @@ router.delete('/notes/:id', authenticateToken, async (req, res) => {
  */
 router.get('/categories', authenticateToken, async (req, res) => {
   try {
-    const { data, error } = await supabase /* Get all categories. */
+    const { data, error } = await supabase
       .from('categories')
       .select('*')
       .order('name', { ascending: true });
@@ -232,10 +232,10 @@ router.get('/categories', authenticateToken, async (req, res) => {
  */
 router.post('/categories', authenticateToken, async (req, res) => {
   let { name } = req.body;
-  name = validator.trim(name); /* Sanitize the name */
+  name = validator.trim(name);
 
   try {
-    const { data, error } = await supabase   /* Create a new category. */
+    const { data, error } = await supabase
       .from('categories')
       .insert([{ name }])
       .select()
@@ -263,11 +263,11 @@ router.put('/categories/:id', authenticateToken, async (req, res) => {
   let { id } = req.params;
   let { name } = req.body;
 
-  id = validator.trim(id); /* Sanitize the IDs */
-  name = validator.trim(name);  /* Sanitize the name */
+  id = validator.trim(id);
+  name = validator.trim(name);
 
   try {
-    const { data, error } = await supabase /* Update the category by ID. */
+    const { data, error } = await supabase
       .from('categories')
       .update({ name })
       .eq('category_id', id)
@@ -295,10 +295,10 @@ router.put('/categories/:id', authenticateToken, async (req, res) => {
  */
 router.delete('/categories/:id', authenticateToken, async (req, res) => {
   let { id } = req.params;
-  id = validator.trim(id); /* Sanitize the IDs */
+  id = validator.trim(id);
 
   try {
-    const { data, error } = await supabase /* Delete the category by ID. */
+    const { data, error } = await supabase
       .from('categories')
       .delete()
       .eq('category_id', id);
@@ -319,7 +319,7 @@ router.delete('/categories/:id', authenticateToken, async (req, res) => {
  */
 router.get('/users', authenticateToken, async (req, res) => {
   try {
-    const { data, error } = await supabase /* Get all users. */
+    const { data, error } = await supabase
       .from('users')
       .select('user_id, username, email')
       .order('username', { ascending: true });
@@ -340,11 +340,11 @@ router.get('/users', authenticateToken, async (req, res) => {
  */
 router.post('/notes/:id/share', authenticateToken, async (req, res) => {
   const { id } = req.params;
-  const { userId } = req.body; /* Get the user ID from the request body */
- 
+  const { userId } = req.body;
+
   try {
     // Check if the note exists
-    const { data: noteData, error: noteError } = await supabase /* Check if the note exists. */
+    const { data: noteData, error: noteError } = await supabase
       .from('notes')
       .select('note_id')
       .eq('note_id', id)
@@ -357,7 +357,7 @@ router.post('/notes/:id/share', authenticateToken, async (req, res) => {
     }
 
     // Check if the user exists
-    const { data: userData, error: userError } = await supabase /* Check if the user exists. */
+    const { data: userData, error: userError } = await supabase
       .from('users')
       .select('user_id')
       .eq('user_id', userId)
@@ -370,21 +370,21 @@ router.post('/notes/:id/share', authenticateToken, async (req, res) => {
     }
 
     // Check if the note is already shared with the user
-    const { data: existingShare, error: existingShareError } = await supabase /* Check if the note is already shared with the user. */
+    const { data: existingShare, error: existingShareError } = await supabase
       .from('user_notes')
       .select('*')
       .eq('note_id', id)
       .eq('user_id', userId)
       .single();
 
-    if (existingShareError && existingShareError.code !== 'PGRST116') throw existingShareError; // PGRST116 = no data found
+    if (existingShareError && existingShareError.code !== 'PGRST116') throw existingShareError;
 
     if (existingShare) {
       return res.status(400).json({ error: 'Note is already shared with this user' });
     }
 
     // Add the user to the user_notes table
-    const { data: sharedNote, error: shareError } = await supabase /* Add the user to the user_notes table. */
+    const { data: sharedNote, error: shareError } = await supabase
       .from('user_notes')
       .insert([{ note_id: id, user_id: userId, is_creator: false }])
       .select()
@@ -404,12 +404,12 @@ router.post('/notes/:id/share', authenticateToken, async (req, res) => {
  * @route GET /api/notes/:id/users
  * @access Private
  */
-router.get('/notes/:id/users', authenticateToken, async (req, res) => { 
+router.get('/notes/:id/users', authenticateToken, async (req, res) => {
   let { id } = req.params;
-  id = validator.trim(id); /* Sanitize the IDs */
+  id = validator.trim(id);
 
   try {
-    const { data: users, error } = await supabase /* Get users with access to the note. */
+    const { data: users, error } = await supabase
       .from('user_notes')
       .select(`
         user_id,
@@ -439,12 +439,12 @@ router.delete('/notes/:noteId/users/:userId', authenticateToken, async (req, res
   let { noteId, userId } = req.params;
   const { user_id: requestingUserId } = req.user;
 
-  noteId = validator.trim(noteId); /* Sanitize the IDs */
-  userId = validator.trim(userId);  /* Sanitize the IDs */
+  noteId = validator.trim(noteId);
+  userId = validator.trim(userId);
 
   try {
     // Check if the requester is the creator of the note
-    const { data: creatorData, error: creatorError } = await supabase /* Check if the requester is the creator of the note. */
+    const { data: creatorData, error: creatorError } = await supabase
       .from('user_notes')
       .select('is_creator')
       .eq('note_id', noteId)
@@ -457,7 +457,7 @@ router.delete('/notes/:noteId/users/:userId', authenticateToken, async (req, res
       return res.status(403).json({ error: 'Only the creator can remove user access' });
     }
 
-    const { data, error } = await supabase /* Remove user access from the note. */
+    const { data, error } = await supabase
       .from('user_notes')
       .delete()
       .eq('note_id', noteId)

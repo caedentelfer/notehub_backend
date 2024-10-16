@@ -13,11 +13,9 @@ dotenv.config();
  * @param {NextFunction} next - The next middleware function  
  **/
 const authenticateToken = (req, res, next) => {
-  /* Retrieve the Authorization header */
   const authHeader = req.headers["authorization"];
   console.log("Authorization Header:", authHeader);
 
-  /* Token is expected to be in the format "Bearer TOKEN" */
   const token = authHeader && authHeader.split(" ")[1];
 
   if (!token) {
@@ -25,13 +23,12 @@ const authenticateToken = (req, res, next) => {
     return res.status(401).json({ error: "Access denied. No token provided." });
   }
 
-  /*Verify the token using the JWT secret key */
   jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
     if (err) {
       console.error("Token verification failed:", err.message);
       return res.status(403).json({ error: "Invalid or expired token." });
     }
-    console.log("Authenticated User:", decoded); 
+    console.log("Authenticated User:", decoded);
     req.user = decoded;
     next();
   });
