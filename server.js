@@ -42,37 +42,50 @@ if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
+// Redis setup
+const redisClient = new Redis(process.env.REDIS_URL);
+const redisProvider = new RedisProvider(redisClient);
+
+// Add error handling for Redis connection
+redisClient.on('error', (err) => {
+  console.error('Redis connection error:', err);
+});
+
+redisClient.on('connect', () => {
+  console.log('Connected to Redis successfully');
+});
+
 const docs = new Map();
 
-/**
- * Load Yjs document from Supabase.
- * @param {string} noteId - The ID of the note to load.
- * @returns {Promise<Y.Doc>} - The loaded Yjs document.
- */
 const loadDocument = async (noteId) => {
   if (docs.has(noteId)) return docs.get(noteId);
 
   const ydoc = new Y.Doc();
+
   try {
-    const { data, error } = await supabase
-      .from('notes')
-      .select('content, yjs_state')
-      .eq('note_id', noteId)
-      .single();
-
-    if (error) throw error;
-
-    if (data.yjs_state) {
-      const decodedState = Buffer.from(data.yjs_state, 'base64');
-      Y.applyUpdate(ydoc, decodedState);
-    } else if (data.content) {
-      // Initialize Yjs document with existing content
-      ydoc.getText('content').insert(0, data.content);
-      const state = Buffer.from(Y.encodeStateAsUpdate(ydoc)).toString('base64');
-      await supabase
+    // Try to load the document from Redis first
+    const redisDoc = await redisProvider.getYDoc(noteId);
+    if (redisDoc) {
+      Y.applyUpdate(ydoc, redisDoc);
+    } else {
+      // If not in Redis, load from Supabase
+      const { data, error } = await supabase
         .from('notes')
-        .update({ yjs_state: state })
-        .eq('note_id', noteId);
+        .select('content, yjs_state')
+        .eq('note_id', noteId)
+        .single();
+
+      if (error) throw error;
+
+      if (data.yjs_state) {
+        const decodedState = Buffer.from(data.yjs_state, 'base64');
+        Y.applyUpdate(ydoc, decodedState);
+      } else if (data.content) {
+        ydoc.getText('content').insert(0, data.content);
+      }
+
+      // Store the loaded document in Redis
+      await redisProvider.storeYDoc(noteId, Y.encodeStateAsUpdate(ydoc));
     }
   } catch (err) {
     console.error(`Error loading document ${noteId}:`, err);
@@ -82,29 +95,35 @@ const loadDocument = async (noteId) => {
   return ydoc;
 };
 
-/**
- * Persist Yjs document to Supabase.
- * @param {string} noteId - The ID of the note to persist.
- * @param {Y.Doc} ydoc - The Yjs document to persist.
- */
 const persistDocument = async (noteId, ydoc) => {
   try {
-    const state = Buffer.from(Y.encodeStateAsUpdate(ydoc)).toString('base64');
+    const state = Y.encodeStateAsUpdate(ydoc);
+    const base64State = Buffer.from(state).toString('base64');
+
+    // Update Redis
+    await redisProvider.storeYDoc(noteId, state);
+
+    // Update Supabase
     await supabase
       .from('notes')
-      .update({ yjs_state: state, last_update: new Date().toISOString() })
+      .update({ yjs_state: base64State, last_update: new Date().toISOString() })
       .eq('note_id', noteId);
-    console.log(`Persisted document ${noteId} to Supabase.`);
+
+    console.log(`Persisted document ${noteId} to Redis and Supabase.`);
   } catch (err) {
     console.error(`Error persisting document ${noteId}:`, err);
   }
 };
 
-// Load Yjs documents from Supabase
 const wss = new WebSocketServer({ noServer: true });
 
 wss.on('connection', (ws, req) => {
-  setupWSConnection(ws, req, { docs: docs, awareness: {}, gc: true });
+  setupWSConnection(ws, req, {
+    docs: docs,
+    awareness: {},
+    gc: true,
+    provider: redisProvider, // Pass the Redis provider to y-websocket
+  });
 });
 
 // Handle WebSocket upgrade requests
