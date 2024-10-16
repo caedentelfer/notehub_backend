@@ -1,3 +1,5 @@
+// backend/server.js
+
 import express from 'express';
 import http from 'http';
 import { WebSocketServer } from 'ws';
@@ -6,8 +8,10 @@ import dotenv from 'dotenv';
 import noteRoutes from './routes/noteRoutes.js';
 import userRoutes from './routes/userRoutes.js';
 import { createClient } from '@supabase/supabase-js';
-import * as Y from 'yjs';
-import { setupWSConnection } from 'y-websocket/bin/utils';
+import Redis from 'ioredis'; // Import Redis from 'ioredis'
+import { RedisPersistence } from 'y-redis'; // Import RedisPersistence from 'y-redis'
+import { setupWSConnection } from './yjsUtils.js'; // Import your custom setupWSConnection
+import logger from './logger.js'; // Import logger if implemented
 
 dotenv.config();
 
@@ -16,6 +20,7 @@ const server = http.createServer(app);
 
 const port = process.env.PORT || 3001;
 
+// Configure CORS
 app.use(cors({
   origin: new URL(process.env.FRONTEND_URL || "http://localhost:3000").origin,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -36,27 +41,35 @@ app.use('/api/users', userRoutes);
 
 // Supabase Client Initialization
 if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
-  console.error('Supabase URL or Key is missing. Please check your .env file.');
+  logger.error('Supabase URL or Key is missing. Please check your .env file.');
   process.exit(1);
 }
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
-// Redis setup
-const redisClient = new Redis(process.env.REDIS_URL);
-const redisProvider = new RedisProvider(redisClient);
+// Initialize Redis
+if (!process.env.REDIS_URL) {
+  logger.error('Redis URL is missing. Please set the REDIS_URL environment variable.');
+  process.exit(1);
+}
+
+const redisClient = new Redis(process.env.REDIS_URL); // Initialize Redis client
+
+const redisPersistence = new RedisPersistence(redisClient); // Initialize RedisPersistence
 
 // Add error handling for Redis connection
 redisClient.on('error', (err) => {
-  console.error('Redis connection error:', err);
+  logger.error(`Redis connection error: ${err}`);
 });
 
 redisClient.on('connect', () => {
-  console.log('Connected to Redis successfully');
+  logger.info('Connected to Redis successfully');
 });
 
+// Initialize Yjs document map
 const docs = new Map();
 
+// Load and Persist Functions
 const loadDocument = async (noteId) => {
   if (docs.has(noteId)) return docs.get(noteId);
 
@@ -64,7 +77,7 @@ const loadDocument = async (noteId) => {
 
   try {
     // Try to load the document from Redis first
-    const redisDoc = await redisProvider.getYDoc(noteId);
+    const redisDoc = await redisPersistence.getYDoc(noteId);
     if (redisDoc) {
       Y.applyUpdate(ydoc, redisDoc);
     } else {
@@ -85,10 +98,10 @@ const loadDocument = async (noteId) => {
       }
 
       // Store the loaded document in Redis
-      await redisProvider.storeYDoc(noteId, Y.encodeStateAsUpdate(ydoc));
+      await redisPersistence.storeYDoc(noteId, Y.encodeStateAsUpdate(ydoc));
     }
   } catch (err) {
-    console.error(`Error loading document ${noteId}:`, err);
+    logger.error(`Error loading document ${noteId}: ${err}`);
   }
 
   docs.set(noteId, ydoc);
@@ -101,7 +114,7 @@ const persistDocument = async (noteId, ydoc) => {
     const base64State = Buffer.from(state).toString('base64');
 
     // Update Redis
-    await redisProvider.storeYDoc(noteId, state);
+    await redisPersistence.storeYDoc(noteId, state);
 
     // Update Supabase
     await supabase
@@ -109,34 +122,31 @@ const persistDocument = async (noteId, ydoc) => {
       .update({ yjs_state: base64State, last_update: new Date().toISOString() })
       .eq('note_id', noteId);
 
-    console.log(`Persisted document ${noteId} to Redis and Supabase.`);
+    logger.info(`Persisted document ${noteId} to Redis and Supabase.`);
   } catch (err) {
-    console.error(`Error persisting document ${noteId}:`, err);
+    logger.error(`Error persisting document ${noteId}: ${err}`);
   }
 };
 
+// Initialize WebSocket Server
 const wss = new WebSocketServer({ noServer: true });
 
+// Handle WebSocket Connections with Redis Persistence
 wss.on('connection', (ws, req) => {
-  setupWSConnection(ws, req, {
-    docs: docs,
-    awareness: {},
-    gc: true,
-    provider: redisProvider, // Pass the Redis provider to y-websocket
-  });
+  logger.info(`New WebSocket connection established for document: ${req.url}`);
+  setupWSConnection(ws, req, { persistence: redisPersistence, gc: true });
 });
 
 // Handle WebSocket upgrade requests
 server.on('upgrade', (request, socket, head) => {
-  const handleAuth = (ws) => {
+  // You can add authentication here if needed
+  wss.handleUpgrade(request, socket, head, (ws) => {
     wss.emit('connection', ws, request);
-  };
-
-  wss.handleUpgrade(request, socket, head, handleAuth);
+  });
 });
 
 // Persistence interval
-const PERSISTENCE_INTERVAL = 5 * 60 * 1000;
+const PERSISTENCE_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
 setInterval(() => {
   for (const [noteId, ydoc] of docs.entries()) {
@@ -144,8 +154,27 @@ setInterval(() => {
   }
 }, PERSISTENCE_INTERVAL);
 
+// Start the Server
 server.listen(port, () => {
-  console.log(`Server running on port ${port}`);
+  logger.info(`Server running on port ${port}`);
 });
+
+// Graceful Shutdown Handling
+const shutdown = () => {
+  logger.info('Shutting down server...');
+  wss.close(() => {
+    logger.info('WebSocket server closed.');
+    redisClient.quit(() => {
+      logger.info('Redis connection closed.');
+      server.close(() => {
+        logger.info('HTTP server closed.');
+        process.exit(0);
+      });
+    });
+  });
+};
+
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
 
 export { app, server };
