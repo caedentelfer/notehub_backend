@@ -74,6 +74,7 @@ const loadDocument = async (noteId) => {
         .update({ yjs_state: state })
         .eq('note_id', noteId);
     }
+    console.log(`Loaded document ${noteId}`);
   } catch (err) {
     console.error(`Error loading document ${noteId}:`, err);
   }
@@ -104,16 +105,16 @@ const persistDocument = async (noteId, ydoc) => {
 const wss = new WebSocketServer({ noServer: true });
 
 wss.on('connection', (ws, req) => {
-  setupWSConnection(ws, req, { docs: docs, awareness: {}, gc: true });
+  console.log('New WebSocket connection established.');
+  setupWSConnection(ws, req, { docs: docs, gc: true });
 });
 
 // Handle WebSocket upgrade requests
 server.on('upgrade', (request, socket, head) => {
-  const handleAuth = (ws) => {
+  console.log('Handling WebSocket upgrade request.');
+  wss.handleUpgrade(request, socket, head, (ws) => {
     wss.emit('connection', ws, request);
-  };
-
-  wss.handleUpgrade(request, socket, head, handleAuth);
+  });
 });
 
 // Persistence interval
