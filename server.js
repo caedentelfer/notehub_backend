@@ -3,33 +3,19 @@ import http from 'http';
 import { WebSocketServer } from 'ws';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import { parse } from 'url';
-import * as Y from 'yjs';
 import noteRoutes from './routes/noteRoutes.js';
 import userRoutes from './routes/userRoutes.js';
 import { createClient } from '@supabase/supabase-js';
-import { setupWSConnection } from './yjsUtils.js';
-import logger from './logger.js';
+import * as Y from 'yjs';
+import { setupWSConnection } from 'y-websocket/bin/utils';
 
-// Load environment variables
-const result = dotenv.config();
-if (result.error) {
-  logger.error('Error loading .env file:', result.error);
-  process.exit(1);
-}
-
-// Check for required environment variables
-if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
-  logger.error('Supabase URL or Key is missing. Please check your .env file.');
-  process.exit(1);
-}
+dotenv.config();
 
 const app = express();
 const server = http.createServer(app);
 
 const port = process.env.PORT || 3001;
 
-// Configure CORS
 app.use(cors({
   origin: new URL(process.env.FRONTEND_URL || "http://localhost:3000").origin,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -49,17 +35,24 @@ app.use('/api', noteRoutes);
 app.use('/api/users', userRoutes);
 
 // Supabase Client Initialization
+if (!process.env.SUPABASE_URL || !process.env.SUPABASE_KEY) {
+  console.error('Supabase URL or Key is missing. Please check your .env file.');
+  process.exit(1);
+}
+
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
-// Initialize Yjs document map
 const docs = new Map();
 
-// Load and Persist Functions
+/**
+ * Load Yjs document from Supabase.
+ * @param {string} noteId - The ID of the note to load.
+ * @returns {Promise<Y.Doc>} - The loaded Yjs document.
+ */
 const loadDocument = async (noteId) => {
   if (docs.has(noteId)) return docs.get(noteId);
 
   const ydoc = new Y.Doc();
-
   try {
     const { data, error } = await supabase
       .from('notes')
@@ -73,50 +66,58 @@ const loadDocument = async (noteId) => {
       const decodedState = Buffer.from(data.yjs_state, 'base64');
       Y.applyUpdate(ydoc, decodedState);
     } else if (data.content) {
+      // Initialize Yjs document with existing content
       ydoc.getText('content').insert(0, data.content);
+      const state = Buffer.from(Y.encodeStateAsUpdate(ydoc)).toString('base64');
+      await supabase
+        .from('notes')
+        .update({ yjs_state: state })
+        .eq('note_id', noteId);
     }
   } catch (err) {
-    logger.error(`Error loading document ${noteId}: ${err}`);
+    console.error(`Error loading document ${noteId}:`, err);
   }
 
   docs.set(noteId, ydoc);
   return ydoc;
 };
 
+/**
+ * Persist Yjs document to Supabase.
+ * @param {string} noteId - The ID of the note to persist.
+ * @param {Y.Doc} ydoc - The Yjs document to persist.
+ */
 const persistDocument = async (noteId, ydoc) => {
   try {
-    const state = Y.encodeStateAsUpdate(ydoc);
-    const base64State = Buffer.from(state).toString('base64');
-
+    const state = Buffer.from(Y.encodeStateAsUpdate(ydoc)).toString('base64');
     await supabase
       .from('notes')
-      .update({ yjs_state: base64State, last_update: new Date().toISOString() })
+      .update({ yjs_state: state, last_update: new Date().toISOString() })
       .eq('note_id', noteId);
-
-    logger.info(`Persisted document ${noteId} to Supabase.`);
+    console.log(`Persisted document ${noteId} to Supabase.`);
   } catch (err) {
-    logger.error(`Error persisting document ${noteId}: ${err}`);
+    console.error(`Error persisting document ${noteId}:`, err);
   }
 };
 
-// Initialize WebSocket Server
+// Load Yjs documents from Supabase
 const wss = new WebSocketServer({ noServer: true });
 
-// Handle WebSocket Connections
 wss.on('connection', (ws, req) => {
-  logger.info(`New WebSocket connection established for document: ${req.url}`);
-  setupWSConnection(ws, req, { gc: true });
+  setupWSConnection(ws, req, { docs: docs, awareness: {}, gc: true });
 });
 
 // Handle WebSocket upgrade requests
 server.on('upgrade', (request, socket, head) => {
-  wss.handleUpgrade(request, socket, head, (ws) => {
+  const handleAuth = (ws) => {
     wss.emit('connection', ws, request);
-  });
+  };
+
+  wss.handleUpgrade(request, socket, head, handleAuth);
 });
 
 // Persistence interval
-const PERSISTENCE_INTERVAL = 5 * 60 * 1000; // 5 minutes
+const PERSISTENCE_INTERVAL = 5 * 60 * 1000;
 
 setInterval(() => {
   for (const [noteId, ydoc] of docs.entries()) {
@@ -124,34 +125,8 @@ setInterval(() => {
   }
 }, PERSISTENCE_INTERVAL);
 
-// Start the Server
 server.listen(port, () => {
-  logger.info(`Server running on port ${port}`);
-});
-
-// Graceful Shutdown Handling
-const shutdown = () => {
-  logger.info('Shutting down server...');
-  wss.close(() => {
-    logger.info('WebSocket server closed.');
-    server.close(() => {
-      logger.info('HTTP server closed.');
-      process.exit(0);
-    });
-  });
-};
-
-process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
-
-// WebSocket server cleanup
-wss.on('close', () => {
-  // Persist all documents and clear the docs Map when the server is shutting down
-  for (const [docName, ydoc] of docs.entries()) {
-    persistDocument(docName, ydoc);
-  }
-  docs.clear();
-  logger.info('WebSocket server closed and all documents persisted.');
+  console.log(`Server running on port ${port}`);
 });
 
 export { app, server };
