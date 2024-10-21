@@ -1,14 +1,35 @@
+// backend/routes/notesRoutes.js
+
 import express from 'express';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import validator from 'validator';
 import authenticateToken from '../middleware/authMiddleware.js';
+import nodemailer from 'nodemailer';
 
 dotenv.config();
 
 const router = express.Router();
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+
+// Configure Nodemailer transporter
+const transporter = nodemailer.createTransport({
+  service: 'gmail', // Change this if you're using a different email service
+  auth: {
+    user: process.env.EMAIL_USER, // Your email address
+    pass: process.env.EMAIL_PASS, // Your email password or app-specific password
+  },
+});
+
+// Verify transporter configuration
+transporter.verify(function (error, success) {
+  if (error) {
+    console.error('Nodemailer transporter verification failed:', error);
+  } else {
+    console.log('Nodemailer transporter is ready to send emails.');
+  }
+});
 
 /**
  * Get all notes for the authenticated user.
@@ -92,6 +113,10 @@ router.post('/notes', authenticateToken, async (req, res) => {
     let categoryId = category_id;
 
     if (typeof category_id === 'string' && !Number.isInteger(Number(category_id))) {
+      if (!category_id) {
+        throw new Error('Category name cannot be empty.');
+      }
+
       const { data: newCategory, error: categoryError } = await supabase
         .from('categories')
         .insert({ name: category_id })
@@ -342,30 +367,36 @@ router.post('/notes/:id/share', authenticateToken, async (req, res) => {
   const { id } = req.params;
   const { userId } = req.body;
 
+  // Input validation
+  if (!userId) {
+    return res.status(400).json({ error: 'User ID to share with is required.' });
+  }
+
   try {
+    // Validate userId format (assuming it's numeric)
+    if (!validator.isNumeric(userId.toString())) {
+      return res.status(400).json({ error: 'Invalid user ID format.' });
+    }
+
     // Check if the note exists
     const { data: noteData, error: noteError } = await supabase
       .from('notes')
-      .select('note_id')
+      .select('*')
       .eq('note_id', id)
       .single();
 
-    if (noteError) throw noteError;
-
-    if (!noteData) {
+    if (noteError || !noteData) {
       return res.status(404).json({ error: 'Note not found' });
     }
 
     // Check if the user exists
     const { data: userData, error: userError } = await supabase
       .from('users')
-      .select('user_id')
+      .select('*')
       .eq('user_id', userId)
       .single();
 
-    if (userError) throw userError;
-
-    if (!userData) {
+    if (userError || !userData) {
       return res.status(404).json({ error: 'User not found' });
     }
 
@@ -377,7 +408,10 @@ router.post('/notes/:id/share', authenticateToken, async (req, res) => {
       .eq('user_id', userId)
       .single();
 
-    if (existingShareError && existingShareError.code !== 'PGRST116') throw existingShareError;
+    if (existingShareError && existingShareError.code !== 'PGRST116') {
+      // PGRST116 is the error code for "No rows found" in Supabase
+      throw existingShareError;
+    }
 
     if (existingShare) {
       return res.status(400).json({ error: 'Note is already shared with this user' });
@@ -392,7 +426,40 @@ router.post('/notes/:id/share', authenticateToken, async (req, res) => {
 
     if (shareError) throw shareError;
 
-    res.status(200).json({ message: 'Note shared successfully', data: sharedNote });
+    // Fetch the sharer's username
+    const { data: sharerData, error: sharerError } = await supabase
+      .from('users')
+      .select('username')
+      .eq('user_id', req.user.user_id)
+      .single();
+
+    if (sharerError || !sharerData) {
+      throw sharerError || new Error('Sharer not found');
+    }
+
+    // Prepare email options
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      to: userData.email,
+      subject: 'A Note Has Been Shared With You - NoteHub',
+      text: `Hello ${userData.username},
+
+${sharerData.username} has shared the note "${noteData.title}" with you on NoteHub.
+
+You can access the note by logging into your account.
+
+Best regards,
+NoteHub Team`,
+      // Optionally, you can use HTML templates
+      // html: `<p>Hello ${userData.username},</p><p>${sharerData.username} has shared the note "<strong>${noteData.title}</strong>" with you on NoteHub.</p><p>You can access the note by logging into your account.</p><p>Best regards,<br/>NoteHub Team</p>`
+    };
+
+    // Send email
+    await transporter.sendMail(mailOptions);
+
+    console.log(`Email sent to ${userData.email} for sharing note ID ${id}`);
+
+    res.status(200).json({ message: 'Note shared successfully and email sent.' });
   } catch (error) {
     console.error('Error sharing note:', error);
     res.status(500).json({ error: 'An error occurred while sharing the note', details: error.message });
