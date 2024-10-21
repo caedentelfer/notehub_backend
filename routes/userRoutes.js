@@ -235,7 +235,7 @@ router.post("/reset-password", async (req, res) => {
     console.log("Generated Token:", token);
 
     /*link attached in email to reset password*/ //TODO might need to change LINK
-    const resetLink = `https://notehub-backend-un27.onrender.com/pages/update-password?token=${token}`;
+    const resetLink = `http://localhost:3000/pages/update-password?token=${token}`;
 
     await transporter.sendMail({
       from: process.env.EMAIL_USER,
